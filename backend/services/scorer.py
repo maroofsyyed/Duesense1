@@ -282,7 +282,15 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
 
 
 async def calculate_investment_score(company_id: str, extracted: dict, enrichment: dict) -> dict:
-    """Run all 6 agents in parallel and compile final score."""
+    """Run all agents in parallel and compile final score."""
+
+    # Fetch website DD enrichment separately from MongoDB
+    website_dd_enrichment = None
+    website_dd_data = enrichment_col.find_one(
+        {"company_id": company_id, "source_type": "website_due_diligence"}
+    )
+    if website_dd_data:
+        website_dd_enrichment = website_dd_data.get("data", {})
 
     results = await asyncio.gather(
         agent_founder_quality(extracted, enrichment),
@@ -291,6 +299,7 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
         agent_traction(extracted, enrichment),
         agent_business_model(extracted, enrichment),
         _agent_website_intelligence(enrichment),
+        _agent_website_due_diligence(website_dd_enrichment if website_dd_enrichment else {}),
         return_exceptions=True,
     )
 
@@ -300,6 +309,7 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
     traction_result = results[3] if not isinstance(results[3], Exception) else {}
     model_result = results[4] if not isinstance(results[4], Exception) else {}
     website_result = results[5] if not isinstance(results[5], Exception) else {}
+    website_dd_result = results[6] if not isinstance(results[6], Exception) else {}
 
     # Apply updated weights
     founder_score = min(25, max(0, float(founder_result.get("total_founder_score", 12)) * (25 / 30)))
