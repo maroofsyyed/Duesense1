@@ -626,6 +626,13 @@ function OverviewTab({ extracted, founders, score }) {
           )}
         </div>
       </Card>
+
+      {/* Website Due Diligence Card */}
+      {score?.website_dd_score !== undefined && (
+        <Card title="Website Due Diligence" icon={Eye} testId="website-dd-card" className="lg:col-span-2">
+          <WebsiteDDCard score={score} />
+        </Card>
+      )}
     </div>
   );
 }
