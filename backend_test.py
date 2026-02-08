@@ -7,7 +7,7 @@ from datetime import datetime
 import time
 
 class VCDealAPITester:
-    def __init__(self, base_url="https://38ff65e6-4c92-46cd-aea1-1ff7ca9c46eb.preview.emergentagent.com"):
+    def __init__(self, base_url="https://trust-signal-crawler.preview.emergentagent.com"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
