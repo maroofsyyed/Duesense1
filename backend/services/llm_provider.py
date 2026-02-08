@@ -73,6 +73,34 @@ class LLMProvider:
                     "stream": False,
                     "options": {"temperature": 0.1, "num_predict": 4000},
                 },
+
+    async def _call_groq(self, prompt: str, system_message: str, model: str = "llama3-70b-8192") -> str:
+        """Call Groq API for fast structured extraction"""
+        import httpx
+        
+        if not self.groq_api_key:
+            raise ValueError("GROQ_API_KEY not found in environment")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.groq_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 600,
+                },
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+
             )
             response.raise_for_status()
             return response.json()["response"]
