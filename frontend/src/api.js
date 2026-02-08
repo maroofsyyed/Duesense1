@@ -7,6 +7,24 @@ const api = axios.create({
   timeout: 300000,
 });
 
+// Add response interceptor for better error handling
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    // Handle network errors
+    if (error.code === 'ECONNABORTED') {
+      error.message = 'Request timeout. The backend may be slow or unavailable.';
+    } else if (error.message === 'Network Error' || !error.response) {
+      error.message = 'Cannot connect to backend. Please check your connection.';
+    } else if (error.response?.status === 503) {
+      error.message = 'Backend service is unavailable. Please try again later.';
+    } else if (error.response?.status >= 500) {
+      error.message = 'Backend server error. Please try again later.';
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const getHealth = () => api.get('/api/health');
 export const getDashboardStats = () => api.get('/api/dashboard/stats');
 export const getCompanies = () => api.get('/api/companies');
