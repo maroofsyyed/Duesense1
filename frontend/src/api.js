@@ -1,0 +1,27 @@
+import axios from 'axios';
+
+const API_URL = process.env.REACT_APP_BACKEND_URL;
+
+const api = axios.create({
+  baseURL: API_URL,
+  timeout: 300000,
+});
+
+export const getHealth = () => api.get('/api/health');
+export const getDashboardStats = () => api.get('/api/dashboard/stats');
+export const getCompanies = () => api.get('/api/companies');
+export const getCompany = (id) => api.get(`/api/companies/${id}`);
+export const deleteCompany = (id) => api.delete(`/api/companies/${id}`);
+export const uploadDeck = (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  return api.post('/api/decks/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+export const getDeckStatus = (deckId) => api.get(`/api/decks/${deckId}/status`);
+export const getCompanyScore = (companyId) => api.get(`/api/companies/${companyId}/score`);
+export const getCompanyMemo = (companyId) => api.get(`/api/companies/${companyId}/memo`);
+export const triggerEnrichment = (companyId) => api.post(`/api/companies/${companyId}/enrich`);
+
+export default api;
