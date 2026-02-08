@@ -6,31 +6,33 @@ def test_website_dd_scoring_with_no_pricing():
     from services.scorer import _agent_website_due_diligence
     import asyncio
     
-    # Mock website DD data with no pricing
+    # Mock website DD data with no pricing - wrapped in data key as it would be from MongoDB
     mock_dd_data = {
-        "status": "completed",
-        "pages_crawled": 5,
-        "extraction": {
-            "product_signals": {
-                "product_description": "Great product [SOURCE: /]",
-                "key_features": ["Feature 1 [SOURCE: /features]"],
-                "api_available": "true"
-            },
-            "business_model_signals": {
-                "pricing_model": "not_mentioned",
-                "price_points": [],
-                "free_trial": "not_mentioned",
-                "sales_motion": "not_mentioned"
-            },
-            "customer_validation_signals": {
-                "customer_logos_count": "not_mentioned",
-                "case_study_count": "not_mentioned",
-                "named_customers": []
-            },
-            "trust_compliance_signals": {
-                "security_page_exists": True,
-                "certifications": [],
-                "privacy_policy_exists": True
+        "data": {
+            "status": "completed",
+            "pages_crawled": 5,
+            "extraction": {
+                "product_signals": {
+                    "product_description": "Great product [SOURCE: /]",
+                    "key_features": ["Feature 1 [SOURCE: /features]"],
+                    "api_available": "true"
+                },
+                "business_model_signals": {
+                    "pricing_model": "not_mentioned",
+                    "price_points": [],
+                    "free_trial": "not_mentioned",
+                    "sales_motion": "not_mentioned"
+                },
+                "customer_validation_signals": {
+                    "customer_logos_count": "not_mentioned",
+                    "case_study_count": "not_mentioned",
+                    "named_customers": []
+                },
+                "trust_compliance_signals": {
+                    "security_page_exists": True,
+                    "certifications": [],
+                    "privacy_policy_exists": True
+                }
             }
         }
     }
