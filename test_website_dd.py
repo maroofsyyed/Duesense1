@@ -58,31 +58,33 @@ def test_website_dd_scoring_with_security_page():
     from services.scorer import _agent_website_due_diligence
     import asyncio
     
-    # Mock website DD data with security page
+    # Mock website DD data with security page - wrapped in data key
     mock_dd_data = {
-        "status": "completed",
-        "pages_crawled": 10,
-        "extraction": {
-            "product_signals": {
-                "product_description": "Enterprise security platform [SOURCE: /]",
-                "key_features": ["Feature 1 [SOURCE: /]", "Feature 2 [SOURCE: /]"],
-                "api_available": "true"
-            },
-            "business_model_signals": {
-                "pricing_model": "subscription",
-                "price_points": ["$99/mo [SOURCE: /pricing]"],
-                "free_trial": "true",
-                "sales_motion": "self_serve"
-            },
-            "customer_validation_signals": {
-                "customer_logos_count": "5",
-                "case_study_count": "2",
-                "named_customers": ["Customer A [SOURCE: /customers]"]
-            },
-            "trust_compliance_signals": {
-                "security_page_exists": True,
-                "certifications": ["SOC2 [SOURCE: /security]", "ISO27001 [SOURCE: /security]"],
-                "privacy_policy_exists": True
+        "data": {
+            "status": "completed",
+            "pages_crawled": 10,
+            "extraction": {
+                "product_signals": {
+                    "product_description": "Enterprise security platform [SOURCE: /]",
+                    "key_features": ["Feature 1 [SOURCE: /]", "Feature 2 [SOURCE: /]"],
+                    "api_available": "true"
+                },
+                "business_model_signals": {
+                    "pricing_model": "subscription",
+                    "price_points": ["$99/mo [SOURCE: /pricing]"],
+                    "free_trial": "true",
+                    "sales_motion": "self_serve"
+                },
+                "customer_validation_signals": {
+                    "customer_logos_count": "5",
+                    "case_study_count": "2",
+                    "named_customers": ["Customer A [SOURCE: /customers]"]
+                },
+                "trust_compliance_signals": {
+                    "security_page_exists": True,
+                    "certifications": ["SOC2 [SOURCE: /security]", "ISO27001 [SOURCE: /security]"],
+                    "privacy_policy_exists": True
+                }
             }
         }
     }
