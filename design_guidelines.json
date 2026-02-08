@@ -1,0 +1,140 @@
+{
+  "identity": {
+    "name": "E1 - The Anti-AI Designer",
+    "tone": "Professional, Data-Dense, High-Stakes, Analytical",
+    "metaphor": "The Deal Cockpit / Bloomberg for VC",
+    "theme_preference": "dark"
+  },
+  "typography": {
+    "fonts": {
+      "headings": {
+        "family": "Chivo, sans-serif",
+        "weights": ["700", "900"],
+        "usage": "Page titles, Section headers, Key metrics labels"
+      },
+      "body": {
+        "family": "Inter, sans-serif",
+        "weights": ["400", "500", "600"],
+        "usage": "Narrative text, descriptions, buttons"
+      },
+      "mono": {
+        "family": "JetBrains Mono, monospace",
+        "weights": ["400", "500"],
+        "usage": "Financial data, Dates, IDs, Scores, Code snippets"
+      }
+    },
+    "scale": {
+      "h1": "text-4xl md:text-5xl font-black tracking-tight",
+      "h2": "text-3xl font-bold tracking-tight",
+      "h3": "text-2xl font-bold tracking-tight",
+      "p": "text-base leading-relaxed text-muted-foreground",
+      "small": "text-sm font-medium text-muted-foreground",
+      "label": "text-xs uppercase tracking-widest font-semibold text-muted-foreground"
+    }
+  },
+  "colors": {
+    "palette": {
+      "name": "Venture Obsidian",
+      "background": "#09090b",
+      "surface": "#18181b",
+      "surface_highlight": "#27272a",
+      "border": "#27272a",
+      "primary": "#6366f1",
+      "primary_foreground": "#ffffff",
+      "secondary": "#3b82f6",
+      "accent": "#8b5cf6",
+      "success": "#10b981",
+      "warning": "#f59e0b",
+      "destructive": "#ef4444",
+      "text_primary": "#fafafa",
+      "text_secondary": "#a1a1aa",
+      "text_muted": "#71717a"
+    },
+    "usage_rules": {
+      "background": "bg-[#09090b]",
+      "card_background": "bg-[#18181b]",
+      "border_default": "border-[#27272a]",
+      "text_main": "text-[#fafafa]",
+      "text_dim": "text-[#a1a1aa]",
+      "primary_action": "bg-[#6366f1] hover:bg-[#4f46e5] text-white",
+      "forbidden_colors": ["#1B93A4", "#7351B7"]
+    }
+  },
+  "layout": {
+    "grid_system": "Bento Grid Mode B (High Density)",
+    "container": "max-w-[1600px] mx-auto px-4 md:px-8",
+    "spacing": {
+      "section_gap": "gap-8",
+      "card_padding": "p-6",
+      "inner_element_gap": "gap-4"
+    },
+    "border_radius": "rounded-sm"
+  },
+  "components": {
+    "cards": {
+      "style": "flat_bordered",
+      "classes": "bg-[#18181b] border border-[#27272a] rounded-sm shadow-sm hover:border-[#3f3f46] transition-colors duration-200"
+    },
+    "buttons": {
+      "primary": "bg-[#6366f1] text-white hover:bg-[#4f46e5] rounded-sm font-medium px-6 py-2 shadow-[0_1px_2px_rgba(0,0,0,0.1)] transition-transform active:scale-95",
+      "secondary": "bg-[#27272a] text-[#fafafa] hover:bg-[#3f3f46] border border-[#3f3f46] rounded-sm font-medium px-6 py-2 transition-transform active:scale-95",
+      "ghost": "hover:bg-[#27272a] text-[#a1a1aa] hover:text-white rounded-sm px-4 py-2"
+    },
+    "inputs": {
+      "style": "bg-[#09090b] border border-[#27272a] focus:border-[#6366f1] focus:ring-1 focus:ring-[#6366f1] rounded-sm text-sm h-10 px-3 text-white placeholder:text-[#52525b]"
+    },
+    "charts": {
+      "library": "Recharts (via Shadcn)",
+      "styles": {
+        "tooltip_bg": "#18181b",
+        "grid_color": "#27272a",
+        "text_color": "#a1a1aa"
+      }
+    }
+  },
+  "visual_enhancers": {
+    "glassmorphism": {
+      "usage": "Sticky headers, floating controls",
+      "classes": "bg-[#09090b]/80 backdrop-blur-md border-b border-[#27272a]"
+    },
+    "gradients": {
+      "usage": "Subtle glows only, NO full backgrounds",
+      "tracing_beam": "A glowing gradient line that travels around the container edge for active states"
+    },
+    "textures": {
+      "usage": "Subtle noise on background to reduce digital flatness",
+      "css": "background-image: url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E\");"
+    }
+  },
+  "image_urls": {
+    "logo_main": "https://images.unsplash.com/photo-1611162618828-bc409f073cbf?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njl8MHwxfHNlYXJjaHw0fHx0ZWNoJTIwc3RhcnR1cCUyMGxvZ28lMjBtaW5pbWFsfGVufDB8fHx8MTc3MDU2ODE4NHww&ixlib=rb-4.1.0&q=85",
+    "user_avatar_female": "https://images.pexels.com/photos/30004324/pexels-photo-30004324.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "user_avatar_male": "https://images.unsplash.com/photo-1562228802-4b1052d0f845?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzJ8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3MDU2ODE4NHww&ixlib=rb-4.1.0&q=85",
+    "office_meeting": "https://images.unsplash.com/photo-1760611656160-7c7bf7e6da9f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzOTB8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjBvZmZpY2UlMjBtZWV0aW5nJTIwYm9hcmRyb29tfGVufDB8fHx8MTc3MDU2ODE4NXww&ixlib=rb-4.1.0&q=85",
+    "tech_abstract_bg": "https://images.unsplash.com/photo-1734714555326-d42a7a9f9728?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njl8MHwxfHNlYXJjaHwyfHx0ZWNoJTIwc3RhcnR1cCUyMGxvZ28lMjBtaW5pbWFsfGVufDB8fHx8MTc3MDU2ODE4NHww&ixlib=rb-4.1.0&q=85"
+  },
+  "instructions_to_main_agent": [
+    "Follow the file structure: /app/frontend for React code, /app/backend for FastAPI.",
+    "Use 'lucide-react' for icons.",
+    "Use 'recharts' for data visualization (Radar charts, Area charts).",
+    "Ensure the dashboard is dense but readable. Use col-span logic from Bento Grid Mode B.",
+    "Implement the 'Company Detail Page' with tabs: Overview, Enrichment, Scoring, Memo, Competitors.",
+    "Use the 'user_avatar_female' for the logged-in user profile.",
+    "Use 'tech_abstract_bg' for the pitch deck upload area background (with overlay).",
+    "Strictly adhere to the color palette. No random hex codes.",
+    "All interactive elements must have 'data-testid' attributes.",
+    "Do not use 'Inter' for headings. Use 'Chivo'.",
+    "Do not use generic gradients. Use the defined palette.",
+    "Install 'lucide-react', 'recharts', 'clsx', 'tailwind-merge' via npm/yarn."
+  ],
+  "UNIVERSAL_GUIDELINES": [
+    "Don't make generic centered layouts.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) for overlays.",
+    "Every interaction needs micro-animations - hover states, transitions.",
+    "Use 2-3x more spacing than feels comfortable within content sections, but keep dashboard widgets dense.",
+    "Subtle grain textures/noise overlays are encouraged.",
+    "NEVER use AI assistant Emoji characters like 🤖🧠 in the UI.",
+    "Components MUST use named exports."
+  ]
+}
