@@ -32,6 +32,7 @@ async def enrich_company(company_id: str, extracted_data: dict) -> dict:
 
     if website:
         tasks["website"] = _enrich_website(company_id, website)
+        tasks["website_intelligence"] = _enrich_website_deep(company_id, website)
 
     results = {}
     task_items = list(tasks.items())
@@ -88,7 +89,6 @@ async def _enrich_competitors(company_id: str, company_name: str, product_desc: 
     serp = SerpClient()
     data = await serp.find_competitors(company_name, product_desc)
 
-    # Store each competitor
     for comp in data.get("competitors", []):
         competitors_col.insert_one({
             "company_id": company_id,
@@ -138,3 +138,83 @@ async def _enrich_website(company_id: str, website: str) -> dict:
         "is_valid": True,
     })
     return data
+
+
+async def _enrich_website_deep(company_id: str, website: str) -> dict:
+    """Deep website intelligence extraction - crawls 30+ pages and runs 7 AI agents."""
+    from services.website_intelligence import WebsiteIntelligenceEngine
+
+    engine = WebsiteIntelligenceEngine()
+
+    # Step 1: Deep crawl all pages
+    crawl_results = await engine.deep_crawl(website)
+
+    # Step 2: Detect tech stack (no LLM needed)
+    tech_stack = engine.detect_tech_stack(crawl_results)
+
+    # Step 3: Extract sales signals (no LLM needed)
+    sales_signals = engine.extract_sales_signals(crawl_results)
+
+    # Step 4: Run all 7 AI agents in parallel
+    agent_results = await asyncio.gather(
+        engine.extract_product_intelligence(crawl_results),
+        engine.analyze_revenue_model(crawl_results),
+        engine.extract_customer_validation(crawl_results),
+        engine.extract_team_intelligence(crawl_results),
+        engine.analyze_technical_depth(crawl_results),
+        engine.extract_traction_signals(crawl_results),
+        engine.extract_compliance_signals(crawl_results),
+        return_exceptions=True,
+    )
+
+    product_intel = agent_results[0] if not isinstance(agent_results[0], Exception) else {"error": str(agent_results[0])}
+    revenue_model = agent_results[1] if not isinstance(agent_results[1], Exception) else {"error": str(agent_results[1])}
+    customer_validation = agent_results[2] if not isinstance(agent_results[2], Exception) else {"error": str(agent_results[2])}
+    team_intel = agent_results[3] if not isinstance(agent_results[3], Exception) else {"error": str(agent_results[3])}
+    technical_depth = agent_results[4] if not isinstance(agent_results[4], Exception) else {"error": str(agent_results[4])}
+    traction_signals = agent_results[5] if not isinstance(agent_results[5], Exception) else {"error": str(agent_results[5])}
+    compliance = agent_results[6] if not isinstance(agent_results[6], Exception) else {"error": str(agent_results[6])}
+
+    # Step 5: AI synthesis
+    intelligence_summary = await engine.generate_intelligence_summary({
+        "crawl_results": crawl_results,
+        "tech_stack": tech_stack,
+        "sales_signals": sales_signals,
+        "product_intel": product_intel,
+        "revenue_model": revenue_model,
+        "customer_validation": customer_validation,
+        "team_intel": team_intel,
+        "technical_depth": technical_depth,
+        "traction_signals": traction_signals,
+        "compliance": compliance,
+    })
+
+    full_data = {
+        "intelligence_summary": intelligence_summary,
+        "crawl_meta": {
+            "pages_crawled": crawl_results.get("pages_crawled", 0),
+            "pages_attempted": crawl_results.get("pages_attempted", 0),
+            "base_url": crawl_results.get("base_url"),
+        },
+        "product_intel": product_intel,
+        "revenue_model": revenue_model,
+        "customer_validation": customer_validation,
+        "team_intel": team_intel,
+        "technical_depth": technical_depth,
+        "traction_signals": traction_signals,
+        "compliance": compliance,
+        "tech_stack": tech_stack,
+        "sales_signals": sales_signals,
+        "crawl_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    enrichment_col.insert_one({
+        "company_id": company_id,
+        "source_type": "website_intelligence",
+        "source_url": website,
+        "data": full_data,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "is_valid": True,
+    })
+
+    return full_data
