@@ -7,6 +7,7 @@ from bson.errors import InvalidId
 from dotenv import load_dotenv
 from typing import Optional
 import os
+import sys
 import uuid
 from datetime import datetime, timezone
 import json
@@ -122,6 +123,25 @@ async def shutdown_event():
         logger.info("✓ MongoDB connection closed")
     except Exception as e:
         logger.error(f"✗ Error closing MongoDB connection: {str(e)}")
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Render"""
+    try:
+        # Test MongoDB connection
+        client.admin.command('ping')
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "python_version": sys.version
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(e)
+        }
 
 
 @app.get("/api/health")

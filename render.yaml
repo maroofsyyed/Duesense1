@@ -1,19 +1,13 @@
 services:
   - type: web
     name: duesense-backend
-    env: python
-    region: oregon
-    buildCommand: |
-      # Force remove any cached Python
-      rm -rf /opt/render/project/python/Python-3.13.4 2>/dev/null || true
-      pip install --upgrade pip
-      pip install -r requirements.txt
-    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
-    rootDir: backend
-    pythonVersion: "3.11.9"
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.11.9"
+      - key: PORT
+        value: 10000
       - key: MONGODB_URI
         sync: false
 
