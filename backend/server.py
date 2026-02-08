@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 import json
 import logging
+import certifi
 
 load_dotenv()
 
@@ -31,15 +32,33 @@ app.add_middleware(
 MONGO_URL = os.environ.get("MONGO_URL")
 DB_NAME = os.environ.get("DB_NAME")
 
-# Fail-fast MongoDB connection check
+# Validate required environment variables
 if not MONGO_URL or not DB_NAME:
     raise ValueError("MONGO_URL and DB_NAME environment variables are required")
 
-client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
+if not MONGO_URL.startswith("mongodb+srv://") and not MONGO_URL.startswith("mongodb://"):
+    raise ValueError("Invalid MongoDB URI format - must start with mongodb:// or mongodb+srv://")
+
+# Create MongoDB client with proper SSL/TLS configuration
 try:
+    client = MongoClient(
+        MONGO_URL,
+        tls=True,
+        tlsAllowInvalidCertificates=False,
+        tlsCAFile=certifi.where(),
+        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=10000,
+    )
+    # Test connection
     client.admin.command('ping')
+    logger.info("✓ Successfully connected to MongoDB")
 except (ConnectionFailure, ServerSelectionTimeoutError) as e:
+    logger.error(f"✗ MongoDB connection failed: {str(e)}")
     raise ConnectionFailure(f"MongoDB connection failed: {str(e)}") from e
+except Exception as e:
+    logger.error(f"✗ Unexpected MongoDB error: {str(e)}")
+    raise
 
 db = client[DB_NAME]
 
