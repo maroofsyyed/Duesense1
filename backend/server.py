@@ -49,15 +49,14 @@ try:
         serverSelectionTimeoutMS=10000,
         connectTimeoutMS=10000,
         socketTimeoutMS=10000,
+        maxPoolSize=50,
+        minPoolSize=10,
+        retryWrites=True,
+        retryReads=True
     )
-    # Test connection
-    client.admin.command('ping')
-    logger.info("✓ Successfully connected to MongoDB")
-except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-    logger.error(f"✗ MongoDB connection failed: {str(e)}")
-    raise ConnectionFailure(f"MongoDB connection failed: {str(e)}") from e
+    logger.info("✓ MongoDB client initialized successfully")
 except Exception as e:
-    logger.error(f"✗ Unexpected MongoDB error: {str(e)}")
+    logger.error(f"✗ MongoDB client initialization failed: {str(e)}")
     raise
 
 db = client[DB_NAME]
@@ -100,9 +99,29 @@ def validate_object_id(id_str: str) -> ObjectId:
 
 @app.on_event("startup")
 async def startup_event():
-    """Startup event to ensure PORT is read from environment."""
+    """Startup event to verify MongoDB connection and configure server."""
+    # Verify MongoDB connection
+    try:
+        client.admin.command('ping')
+        logger.info("✓ MongoDB connection verified on startup")
+    except (ConnectionFailure, ServerSelectionTimeoutError) as e:
+        logger.error(f"✗ MongoDB connection failed during startup: {str(e)}")
+        logger.warning("⚠ Application starting but MongoDB connection is not available")
+    except Exception as e:
+        logger.error(f"✗ MongoDB connection error during startup: {str(e)}")
+    
     port = int(os.environ.get("PORT", 8000))
     logger.info(f"Server configured to run on port {port}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Shutdown event to close MongoDB connection."""
+    try:
+        client.close()
+        logger.info("✓ MongoDB connection closed")
+    except Exception as e:
+        logger.error(f"✗ Error closing MongoDB connection: {str(e)}")
 
 
 @app.get("/api/health")

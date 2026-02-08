@@ -1,195 +1,153 @@
 #!/usr/bin/env python3
 """
 MongoDB Connection Test Script
-Tests MongoDB Atlas SSL/TLS connection with proper certificate handling.
-Run this locally before deploying to verify everything works.
+Tests SSL/TLS connection to MongoDB Atlas with proper certificate handling.
 """
 
-import sys
 import os
-from dotenv import load_dotenv
+import sys
+import certifi
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
-# Load environment variables
-load_dotenv()
+def print_section(title):
+    """Print formatted section header"""
+    print(f"\n{'='*60}")
+    print(f"  {title}")
+    print(f"{'='*60}\n")
 
 def check_python_version():
-    """Check if Python version is 3.11.x"""
-    version = sys.version_info
-    print(f"Python Version: {version.major}.{version.minor}.{version.micro}")
+    """Verify Python version"""
+    print_section("Python Version Check")
+    version = sys.version
+    print(f"Python Version: {version}")
     
-    if version.major != 3 or version.minor != 11:
-        print("⚠️  WARNING: Python 3.11.x is recommended for MongoDB Atlas SSL compatibility")
-        print("   Python 3.13.4 has known SSL/TLS issues with MongoDB Atlas")
+    major, minor = sys.version_info[:2]
+    if major == 3 and minor == 11:
+        print("✅ Python 3.11.x detected (CORRECT)")
+        return True
     else:
-        print("✅ Python version is correct (3.11.x)")
-    
-    return version.major == 3 and version.minor == 11
-
-def check_certifi():
-    """Check if certifi is installed and working"""
-    try:
-        import certifi
-        cert_path = certifi.where()
-        print(f"✅ certifi is installed")
-        print(f"   Certificate file location: {cert_path}")
-        
-        # Check if file exists
-        if os.path.exists(cert_path):
-            file_size = os.path.getsize(cert_path)
-            print(f"   Certificate file size: {file_size:,} bytes")
-            print("✅ Certificate file exists and is readable")
-            return True
-        else:
-            print("❌ Certificate file does not exist!")
-            return False
-    except ImportError:
-        print("❌ certifi is NOT installed")
-        print("   Install it with: pip install certifi")
+        print(f"❌ Python {major}.{minor} detected (SHOULD BE 3.11)")
         return False
 
-def check_pymongo():
-    """Check if pymongo is installed"""
+def check_certifi():
+    """Verify certifi is installed and working"""
+    print_section("Certifi SSL Certificate Check")
+    
     try:
-        import pymongo
-        print(f"✅ pymongo is installed (version: {pymongo.__version__})")
+        cert_path = certifi.where()
+        print(f"✅ certifi is installed")
+        print(f"   Certificate bundle location: {cert_path}")
+        
+        if os.path.exists(cert_path):
+            print(f"✅ Certificate bundle exists")
+            return True
+        else:
+            print(f"❌ Certificate bundle not found at {cert_path}")
+            return False
+    except Exception as e:
+        print(f"❌ certifi check failed: {str(e)}")
+        return False
+
+def check_ssl_version():
+    """Check SSL/OpenSSL version"""
+    print_section("SSL/OpenSSL Version Check")
+    
+    try:
+        import ssl
+        print(f"SSL Version: {ssl.OPENSSL_VERSION}")
+        print(f"✅ SSL module available")
         return True
-    except ImportError:
-        print("❌ pymongo is NOT installed")
-        print("   Install it with: pip install pymongo")
+    except Exception as e:
+        print(f"❌ SSL check failed: {str(e)}")
         return False
 
 def test_mongodb_connection():
-    """Test MongoDB connection with SSL/TLS"""
-    import certifi
-    from pymongo import MongoClient
-    from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+    """Test MongoDB connection with SSL"""
+    print_section("MongoDB Connection Test")
     
-    mongo_url = os.environ.get("MONGO_URL")
-    db_name = os.environ.get("DB_NAME")
+    # Get MongoDB URI from environment (check both MONGO_URL and MONGODB_URI)
+    mongodb_uri = os.getenv("MONGO_URL") or os.getenv("MONGODB_URI")
     
-    if not mongo_url:
-        print("❌ MONGO_URL environment variable is not set")
-        print("   Set it in .env file or export it:")
-        print("   export MONGO_URL='mongodb+srv://...'")
+    if not mongodb_uri:
+        print("❌ MONGO_URL or MONGODB_URI environment variable not set")
+        print("\nSet it with:")
+        print('export MONGO_URL="your-mongodb-connection-string"')
+        print('  OR')
+        print('export MONGODB_URI="your-mongodb-connection-string"')
         return False
     
-    if not db_name:
-        print("❌ DB_NAME environment variable is not set")
-        print("   Set it in .env file or export it:")
-        print("   export DB_NAME='your_database_name'")
-        return False
-    
-    print(f"\n📡 Testing MongoDB connection...")
-    print(f"   Database: {db_name}")
-    print(f"   Connection string: {mongo_url[:30]}...{mongo_url[-20:]}")
+    print(f"MongoDB URI: {mongodb_uri[:30]}...{mongodb_uri[-10:]}")
     
     try:
-        print("\n   Creating MongoDB client with SSL/TLS configuration...")
+        print("\nConnecting to MongoDB with SSL/TLS...")
+        
         client = MongoClient(
-            mongo_url,
+            mongodb_uri,
             tls=True,
             tlsAllowInvalidCertificates=False,
             tlsCAFile=certifi.where(),
             serverSelectionTimeoutMS=10000,
             connectTimeoutMS=10000,
-            socketTimeoutMS=10000,
+            socketTimeoutMS=10000
         )
         
-        print("   Testing connection with ping...")
-        result = client.admin.command('ping')
-        print(f"   Ping result: {result}")
+        # Test connection
+        print("Sending ping command...")
+        client.admin.command('ping')
         
-        # Test database access
-        db = client[db_name]
-        collections = db.list_collection_names()
-        print(f"   ✅ Successfully connected to MongoDB!")
-        print(f"   Available collections: {len(collections)}")
-        if collections:
-            print(f"   Collections: {', '.join(collections[:5])}")
-            if len(collections) > 5:
-                print(f"   ... and {len(collections) - 5} more")
+        print("✅ Successfully connected to MongoDB")
+        print("✅ SSL/TLS handshake successful")
+        
+        # Get server info
+        server_info = client.server_info()
+        print(f"\nServer Info:")
+        print(f"  MongoDB Version: {server_info.get('version', 'Unknown')}")
         
         client.close()
         return True
         
     except ConnectionFailure as e:
-        print(f"   ❌ Connection failed: {str(e)}")
-        print("\n   Troubleshooting:")
-        print("   1. Check if MONGO_URL is correct")
-        print("   2. Verify MongoDB Atlas network access (IP whitelist)")
-        print("   3. Check if database user credentials are correct")
-        print("   4. Ensure Python 3.11.x is being used (not 3.13.4)")
+        print(f"❌ MongoDB connection failed: {str(e)}")
         return False
-        
     except ServerSelectionTimeoutError as e:
-        print(f"   ❌ Server selection timeout: {str(e)}")
-        print("\n   Troubleshooting:")
-        print("   1. Check network connectivity")
-        print("   2. Verify MongoDB Atlas cluster is running")
-        print("   3. Check firewall settings")
+        print(f"❌ MongoDB server selection timeout: {str(e)}")
+        print("\nPossible causes:")
+        print("  - Incorrect MongoDB URI")
+        print("  - Network connectivity issues")
+        print("  - MongoDB Atlas IP whitelist restrictions")
         return False
-        
     except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)
-        print(f"   ❌ Unexpected error ({error_type}): {error_msg}")
-        
-        if "SSL" in error_msg or "TLS" in error_msg or "certificate" in error_msg.lower():
-            print("\n   SSL/TLS Error detected!")
-            print("   This is likely a Python version issue.")
-            print("   Solutions:")
-            print("   1. Ensure Python 3.11.9 is installed and being used")
-            print("   2. Verify certifi is installed: pip install certifi")
-            print("   3. Check runtime.txt contains: python-3.11.9")
-            print("   4. On Render: Clear build cache before deploying")
-        
+        print(f"❌ Unexpected error: {str(e)}")
         return False
 
 def main():
-    """Run all checks"""
-    print("=" * 60)
-    print("MongoDB Connection Test")
-    print("=" * 60)
-    print()
+    """Run all tests"""
+    print("\n" + "="*60)
+    print("  MongoDB SSL Connection Test Suite")
+    print("="*60)
     
-    all_checks_passed = True
+    results = {
+        "Python Version": check_python_version(),
+        "Certifi": check_certifi(),
+        "SSL": check_ssl_version(),
+        "MongoDB Connection": test_mongodb_connection()
+    }
     
-    # Check Python version
-    print("1. Checking Python version...")
-    if not check_python_version():
-        all_checks_passed = False
-    print()
+    print_section("Test Results Summary")
     
-    # Check certifi
-    print("2. Checking certifi installation...")
-    if not check_certifi():
-        all_checks_passed = False
-    print()
+    for test, passed in results.items():
+        status = "✅ PASS" if passed else "❌ FAIL"
+        print(f"{status} - {test}")
     
-    # Check pymongo
-    print("3. Checking pymongo installation...")
-    if not check_pymongo():
-        all_checks_passed = False
-    print()
+    all_passed = all(results.values())
     
-    # Test MongoDB connection
-    print("4. Testing MongoDB connection...")
-    if not test_mongodb_connection():
-        all_checks_passed = False
-    print()
-    
-    # Summary
-    print("=" * 60)
-    if all_checks_passed:
-        print("✅ ALL CHECKS PASSED!")
-        print("   Your MongoDB connection is configured correctly.")
-        print("   You can proceed with deployment to Render.")
+    if all_passed:
+        print("\n🎉 All tests passed! Ready to deploy.")
+        return 0
     else:
-        print("❌ SOME CHECKS FAILED")
-        print("   Please fix the issues above before deploying.")
-        sys.exit(1)
-    print("=" * 60)
+        print("\n⚠️  Some tests failed. Fix issues before deploying.")
+        return 1
 
 if __name__ == "__main__":
-    main()
-
+    sys.exit(main())

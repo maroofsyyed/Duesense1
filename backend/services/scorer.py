@@ -2,9 +2,11 @@
 import asyncio
 from datetime import datetime, timezone
 from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from bson import ObjectId
 from dotenv import load_dotenv
 import os
+import certifi
 
 from services.agents import (
     agent_founder_quality,
@@ -16,8 +18,28 @@ from services.agents import (
 from services.llm_provider import llm
 
 load_dotenv()
-client = MongoClient(os.environ.get("MONGO_URL"))
-db = client[os.environ.get("DB_NAME")]
+
+# MongoDB client with proper SSL/TLS configuration
+MONGO_URL = os.environ.get("MONGO_URL")
+DB_NAME = os.environ.get("DB_NAME")
+
+if not MONGO_URL or not DB_NAME:
+    raise ValueError("MONGO_URL and DB_NAME environment variables are required")
+
+client = MongoClient(
+    MONGO_URL,
+    tls=True,
+    tlsAllowInvalidCertificates=False,
+    tlsCAFile=certifi.where(),
+    serverSelectionTimeoutMS=10000,
+    connectTimeoutMS=10000,
+    socketTimeoutMS=10000,
+    maxPoolSize=50,
+    minPoolSize=10,
+    retryWrites=True,
+    retryReads=True
+)
+db = client[DB_NAME]
 scores_col = db["investment_scores"]
 enrichment_col = db["enrichment_sources"]
 
