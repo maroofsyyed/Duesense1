@@ -1,0 +1,360 @@
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pymongo import MongoClient
+from bson import ObjectId
+from dotenv import load_dotenv
+import os
+import uuid
+from datetime import datetime, timezone
+import json
+
+load_dotenv()
+
+app = FastAPI(title="VC Deal Intelligence API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+MONGO_URL = os.environ.get("MONGO_URL")
+DB_NAME = os.environ.get("DB_NAME")
+client = MongoClient(MONGO_URL)
+db = client[DB_NAME]
+
+# Collections
+companies_col = db["companies"]
+pitch_decks_col = db["pitch_decks"]
+founders_col = db["founders"]
+enrichment_col = db["enrichment_sources"]
+competitors_col = db["competitors"]
+scores_col = db["investment_scores"]
+memos_col = db["investment_memos"]
+
+# Create indexes
+companies_col.create_index("name")
+pitch_decks_col.create_index("company_id")
+founders_col.create_index("company_id")
+enrichment_col.create_index("company_id")
+scores_col.create_index("company_id")
+
+
+def serialize_doc(doc):
+    if doc is None:
+        return None
+    doc["id"] = str(doc.pop("_id"))
+    return doc
+
+
+def serialize_docs(docs):
+    return [serialize_doc(d) for d in docs]
+
+
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "service": "vc-deal-intelligence"}
+
+
+# ============ COMPANY ENDPOINTS ============
+
+@app.get("/api/companies")
+async def list_companies():
+    companies = list(companies_col.find().sort("created_at", -1))
+    result = []
+    for c in companies:
+        c["id"] = str(c.pop("_id"))
+        score = scores_col.find_one({"company_id": c["id"]}, {"_id": 0})
+        c["score"] = score
+        result.append(c)
+    return {"companies": result}
+
+
+@app.get("/api/companies/{company_id}")
+async def get_company(company_id: str):
+    company = companies_col.find_one({"_id": ObjectId(company_id)})
+    if not company:
+        raise HTTPException(404, "Company not found")
+    company = serialize_doc(company)
+
+    # Get related data
+    decks = serialize_docs(list(pitch_decks_col.find({"company_id": company_id})))
+    founders_list = serialize_docs(list(founders_col.find({"company_id": company_id})))
+    enrichments = serialize_docs(list(enrichment_col.find({"company_id": company_id})))
+    score = scores_col.find_one({"company_id": company_id}, {"_id": 0})
+    comps = serialize_docs(list(competitors_col.find({"company_id": company_id})))
+    memo = memos_col.find_one({"company_id": company_id}, {"_id": 0})
+
+    return {
+        "company": company,
+        "pitch_decks": decks,
+        "founders": founders_list,
+        "enrichments": enrichments,
+        "score": score,
+        "competitors": comps,
+        "memo": memo,
+    }
+
+
+@app.delete("/api/companies/{company_id}")
+async def delete_company(company_id: str):
+    companies_col.delete_one({"_id": ObjectId(company_id)})
+    pitch_decks_col.delete_many({"company_id": company_id})
+    founders_col.delete_many({"company_id": company_id})
+    enrichment_col.delete_many({"company_id": company_id})
+    scores_col.delete_many({"company_id": company_id})
+    competitors_col.delete_many({"company_id": company_id})
+    memos_col.delete_many({"company_id": company_id})
+    return {"status": "deleted"}
+
+
+# ============ DECK UPLOAD & PROCESSING ============
+
+@app.post("/api/decks/upload")
+async def upload_deck(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    file_ext = file.filename.split(".")[-1].lower()
+    if file_ext not in ["pdf", "pptx", "ppt"]:
+        raise HTTPException(400, "Only PDF and PPTX files are supported")
+
+    content = await file.read()
+    file_size = len(content)
+    max_size = int(os.environ.get("MAX_FILE_SIZE_MB", 25)) * 1024 * 1024
+    if file_size > max_size:
+        raise HTTPException(400, f"File exceeds {os.environ.get('MAX_FILE_SIZE_MB', 25)}MB limit")
+
+    # Create company placeholder
+    company_id = str(companies_col.insert_one({
+        "name": "Processing...",
+        "status": "processing",
+        "stage": None,
+        "website": None,
+        "tagline": None,
+        "founded_year": None,
+        "hq_location": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).inserted_id)
+
+    # Save file locally
+    file_path = f"/tmp/decks/{uuid.uuid4()}.{file_ext}"
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Create deck record
+    deck_id = str(pitch_decks_col.insert_one({
+        "company_id": company_id,
+        "file_path": file_path,
+        "file_name": file.filename,
+        "file_size": file_size,
+        "processing_status": "uploading",
+        "extracted_data": None,
+        "error_message": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }).inserted_id)
+
+    # Process in background
+    background_tasks.add_task(process_deck_pipeline, deck_id, company_id, file_path, file_ext)
+
+    return {
+        "deck_id": deck_id,
+        "company_id": company_id,
+        "status": "processing",
+        "message": "Deck uploaded. Processing started.",
+    }
+
+
+async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, file_ext: str):
+    """Full pipeline: extract -> enrich -> score -> memo"""
+    try:
+        # Step 1: Extract
+        pitch_decks_col.update_one(
+            {"_id": ObjectId(deck_id)},
+            {"$set": {"processing_status": "extracting"}}
+        )
+        companies_col.update_one(
+            {"_id": ObjectId(company_id)},
+            {"$set": {"status": "extracting"}}
+        )
+
+        from services.deck_processor import extract_deck
+        extracted = await extract_deck(file_path, file_ext)
+
+        pitch_decks_col.update_one(
+            {"_id": ObjectId(deck_id)},
+            {"$set": {"extracted_data": extracted, "processing_status": "extracted"}}
+        )
+
+        # Update company with extracted data
+        company_data = extracted.get("company", {})
+        companies_col.update_one(
+            {"_id": ObjectId(company_id)},
+            {"$set": {
+                "name": company_data.get("name", "Unknown Company"),
+                "tagline": company_data.get("tagline"),
+                "website": company_data.get("website"),
+                "stage": company_data.get("stage"),
+                "founded_year": company_data.get("founded"),
+                "hq_location": company_data.get("hq_location"),
+                "status": "enriching",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }}
+        )
+
+        # Save founders
+        for f in extracted.get("founders", []):
+            founders_col.insert_one({
+                "company_id": company_id,
+                "name": f.get("name", "Unknown"),
+                "role": f.get("role"),
+                "linkedin_url": f.get("linkedin"),
+                "github_url": f.get("github"),
+                "previous_companies": f.get("previous_companies", []),
+                "years_in_industry": f.get("years_in_industry"),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+        # Step 2: Enrich
+        pitch_decks_col.update_one(
+            {"_id": ObjectId(deck_id)},
+            {"$set": {"processing_status": "enriching"}}
+        )
+
+        from services.enrichment_engine import enrich_company
+        enrichment_data = await enrich_company(company_id, extracted)
+
+        companies_col.update_one(
+            {"_id": ObjectId(company_id)},
+            {"$set": {"status": "scoring"}}
+        )
+
+        # Step 3: Score
+        pitch_decks_col.update_one(
+            {"_id": ObjectId(deck_id)},
+            {"$set": {"processing_status": "scoring"}}
+        )
+
+        from services.scorer import calculate_investment_score
+        score_data = await calculate_investment_score(company_id, extracted, enrichment_data)
+
+        companies_col.update_one(
+            {"_id": ObjectId(company_id)},
+            {"$set": {"status": "generating_memo"}}
+        )
+
+        # Step 4: Generate Memo
+        pitch_decks_col.update_one(
+            {"_id": ObjectId(deck_id)},
+            {"$set": {"processing_status": "generating_memo"}}
+        )
+
+        from services.memo_generator import generate_memo
+        memo_data = await generate_memo(company_id, extracted, enrichment_data, score_data)
+
+        # Final status
+        pitch_decks_col.update_one(
+            {"_id": ObjectId(deck_id)},
+            {"$set": {"processing_status": "completed"}}
+        )
+        companies_col.update_one(
+            {"_id": ObjectId(company_id)},
+            {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        pitch_decks_col.update_one(
+            {"_id": ObjectId(deck_id)},
+            {"$set": {"processing_status": "failed", "error_message": str(e)}}
+        )
+        companies_col.update_one(
+            {"_id": ObjectId(company_id)},
+            {"$set": {"status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+
+
+# ============ PROCESSING STATUS ============
+
+@app.get("/api/decks/{deck_id}/status")
+async def get_deck_status(deck_id: str):
+    deck = pitch_decks_col.find_one({"_id": ObjectId(deck_id)}, {"_id": 0})
+    if not deck:
+        raise HTTPException(404, "Deck not found")
+    return deck
+
+
+# ============ ENRICHMENT TRIGGER ============
+
+@app.post("/api/companies/{company_id}/enrich")
+async def trigger_enrichment(company_id: str, background_tasks: BackgroundTasks):
+    company = companies_col.find_one({"_id": ObjectId(company_id)})
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    deck = pitch_decks_col.find_one({"company_id": company_id})
+    extracted = deck.get("extracted_data", {}) if deck else {}
+
+    background_tasks.add_task(run_enrichment, company_id, extracted)
+    return {"status": "enrichment_started"}
+
+
+async def run_enrichment(company_id, extracted):
+    from services.enrichment_engine import enrich_company
+    await enrich_company(company_id, extracted)
+
+
+# ============ SCORING ============
+
+@app.get("/api/companies/{company_id}/score")
+async def get_score(company_id: str):
+    score = scores_col.find_one({"company_id": company_id}, {"_id": 0})
+    if not score:
+        raise HTTPException(404, "Score not found")
+    return score
+
+
+# ============ MEMO ============
+
+@app.get("/api/companies/{company_id}/memo")
+async def get_memo(company_id: str):
+    memo = memos_col.find_one({"company_id": company_id}, {"_id": 0})
+    if not memo:
+        raise HTTPException(404, "Memo not found")
+    return memo
+
+
+# ============ DASHBOARD STATS ============
+
+@app.get("/api/dashboard/stats")
+async def dashboard_stats():
+    total = companies_col.count_documents({})
+    processing = companies_col.count_documents({"status": {"$in": ["processing", "extracting", "enriching", "scoring", "generating_memo"]}})
+    completed = companies_col.count_documents({"status": "completed"})
+    failed = companies_col.count_documents({"status": "failed"})
+
+    # Get tier distribution
+    tier_1 = scores_col.count_documents({"tier": "TIER_1"})
+    tier_2 = scores_col.count_documents({"tier": "TIER_2"})
+    tier_3 = scores_col.count_documents({"tier": "TIER_3"})
+    tier_pass = scores_col.count_documents({"tier": "PASS"})
+
+    # Recent companies
+    recent = list(companies_col.find({"status": "completed"}).sort("created_at", -1).limit(5))
+    recent_list = []
+    for r in recent:
+        r["id"] = str(r.pop("_id"))
+        score = scores_col.find_one({"company_id": r["id"]}, {"_id": 0})
+        r["score"] = score
+        recent_list.append(r)
+
+    return {
+        "total_companies": total,
+        "processing": processing,
+        "completed": completed,
+        "failed": failed,
+        "tiers": {"tier_1": tier_1, "tier_2": tier_2, "tier_3": tier_3, "pass": tier_pass},
+        "recent_companies": recent_list,
+    }
