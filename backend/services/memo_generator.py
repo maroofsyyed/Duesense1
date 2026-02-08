@@ -11,6 +11,8 @@ load_dotenv()
 client = MongoClient(os.environ.get("MONGO_URL"))
 db = client[os.environ.get("DB_NAME")]
 memos_col = db["investment_memos"]
+enrichment_col = db["enrichment_sources"]
+
 
 
 async def generate_memo(company_id: str, extracted: dict, enrichment: dict, score: dict) -> dict:
