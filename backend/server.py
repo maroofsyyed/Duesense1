@@ -180,10 +180,11 @@ async def upload_deck(
     }
 
 
-async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, file_ext: str):
-    """Full pipeline: extract -> enrich -> score -> memo"""
+async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, file_ext: str, company_website: str = None):
+    """Full pipeline: extract (+website DD in parallel) -> enrich -> score -> memo"""
+    import asyncio
     try:
-        # Step 1: Extract
+        # Step 1: Extract deck + optional website DD in parallel
         pitch_decks_col.update_one(
             {"_id": ObjectId(deck_id)},
             {"$set": {"processing_status": "extracting"}}
@@ -194,7 +195,22 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         )
 
         from services.deck_processor import extract_deck
-        extracted = await extract_deck(file_path, file_ext)
+
+        # Run deck extraction and website due diligence in parallel
+        tasks = [extract_deck(file_path, file_ext)]
+        if company_website:
+            from services.website_due_diligence import run_website_due_diligence
+            tasks.append(run_website_due_diligence(company_id, company_website))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        extracted = results[0] if not isinstance(results[0], Exception) else {}
+        if isinstance(results[0], Exception):
+            raise results[0]
+
+        website_dd_result = None
+        if company_website and len(results) > 1:
+            website_dd_result = results[1] if not isinstance(results[1], Exception) else {"error": str(results[1])}
 
         pitch_decks_col.update_one(
             {"_id": ObjectId(deck_id)},
@@ -202,13 +218,15 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         )
 
         # Update company with extracted data
+        # User-provided website takes priority over deck-extracted website
         company_data = extracted.get("company", {})
+        final_website = company_website or company_data.get("website")
         companies_col.update_one(
             {"_id": ObjectId(company_id)},
             {"$set": {
                 "name": company_data.get("name", "Unknown Company"),
                 "tagline": company_data.get("tagline"),
-                "website": company_data.get("website"),
+                "website": final_website,
                 "stage": company_data.get("stage"),
                 "founded_year": company_data.get("founded"),
                 "hq_location": company_data.get("hq_location"),
@@ -216,6 +234,10 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }}
         )
+
+        # Inject user-provided website into extracted data for downstream enrichment
+        if company_website and "company" in extracted:
+            extracted["company"]["website"] = company_website
 
         # Save founders
         for f in extracted.get("founders", []):
@@ -230,7 +252,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
 
-        # Step 2: Enrich
+        # Step 2: Enrich (website_intelligence in enrichment engine will use the website)
         pitch_decks_col.update_one(
             {"_id": ObjectId(deck_id)},
             {"$set": {"processing_status": "enriching"}}
