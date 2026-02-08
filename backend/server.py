@@ -306,6 +306,36 @@ async def run_enrichment(company_id, extracted):
     await enrich_company(company_id, extracted)
 
 
+# ============ WEBSITE INTELLIGENCE ============
+
+@app.get("/api/companies/{company_id}/website-intelligence")
+async def get_website_intelligence(company_id: str):
+    wi = enrichment_col.find_one(
+        {"company_id": company_id, "source_type": "website_intelligence"},
+        {"_id": 0}
+    )
+    if not wi:
+        raise HTTPException(404, "Website intelligence not found")
+    return wi.get("data", {})
+
+
+@app.post("/api/companies/{company_id}/website-intelligence/rerun")
+async def rerun_website_intelligence(company_id: str, background_tasks: BackgroundTasks):
+    company = companies_col.find_one({"_id": ObjectId(company_id)})
+    if not company:
+        raise HTTPException(404, "Company not found")
+    website = company.get("website")
+    if not website:
+        raise HTTPException(400, "Company has no website URL")
+    background_tasks.add_task(_run_website_intel, company_id, website)
+    return {"status": "website_intelligence_rerun_started"}
+
+
+async def _run_website_intel(company_id, website):
+    from services.enrichment_engine import _enrich_website_deep
+    await _enrich_website_deep(company_id, website)
+
+
 # ============ SCORING ============
 
 @app.get("/api/companies/{company_id}/score")
