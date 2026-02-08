@@ -7,18 +7,21 @@ load_dotenv()
 
 
 class LLMProvider:
-    """Abstraction layer for LLM providers - swap between Emergent and Ollama."""
+    """Abstraction layer for LLM providers - swap between Emergent, Ollama, and Groq."""
 
     def __init__(self, provider="emergent"):
         self.provider = provider
         self.api_key = os.environ.get("EMERGENT_LLM_KEY")
         self.ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+        self.groq_api_key = os.environ.get("GROQ_API_KEY")
 
     async def generate(self, prompt: str, system_message: str = "You are a helpful assistant.", model: str = "gpt-4o") -> str:
         if self.provider == "emergent":
             return await self._call_emergent(prompt, system_message, model)
         elif self.provider == "ollama":
             return await self._call_ollama(prompt, system_message, model)
+        elif self.provider == "groq":
+            return await self._call_groq(prompt, system_message, model)
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 
