@@ -58,6 +58,7 @@ Fill in the following:
 - **Runtime:** `Python 3`
 - **Build Command:** `pip install -r requirements.txt`
 - **Start Command:** `uvicorn server:app --host 0.0.0.0 --port $PORT`
+  - ⚠️ **CRITICAL:** The command is `uvicorn` (not `vicorn`). This is a common typo that will cause deployment failures.
 
 **Important:** Render automatically sets the `PORT` environment variable. Your app reads it via `os.environ.get("PORT", 8000)`.
 
@@ -376,6 +377,23 @@ Run through this checklist to ensure everything works:
 3. Ensure `server.py` is in the `backend/` directory
 4. Check that all Python dependencies are listed in `requirements.txt`
 
+#### Problem: "vicorn: command not found" error
+
+**Symptoms:**
+- Render logs show: `bash: vicorn: command not found`
+- Deployment fails immediately after build succeeds
+
+**Root Cause:**
+- Typo in Render start command: `vicorn` instead of `uvicorn`
+
+**Solutions:**
+1. Go to Render dashboard → Your service → Settings
+2. Scroll to "Start Command"
+3. Verify it says: `uvicorn server:app --host 0.0.0.0 --port $PORT`
+4. If it says `vicorn`, change it to `uvicorn` (note the "u" at the beginning)
+5. Save changes and redeploy
+6. **Correct command:** `uvicorn server:app --host 0.0.0.0 --port $PORT`
+
 #### Problem: MongoDB connection fails
 
 **Symptoms:**
@@ -522,23 +540,28 @@ Run through this checklist to ensure everything works:
 
 ### Common Mistakes
 
-1. **Trailing slashes in URLs**
+1. **Typo in start command: `vicorn` instead of `uvicorn`**
+   - ❌ `vicorn server:app --host 0.0.0.0 --port $PORT`
+   - ✅ `uvicorn server:app --host 0.0.0.0 --port $PORT`
+   - This typo causes: `bash: vicorn: command not found`
+
+2. **Trailing slashes in URLs**
    - ❌ `https://backend.onrender.com/`
    - ✅ `https://backend.onrender.com`
 
-2. **Wrong environment variable names**
+3. **Wrong environment variable names**
    - Must match exactly (case-sensitive)
    - Check spelling: `MONGO_URL` not `MONGO_URI`
 
-3. **Missing environment variables**
+4. **Missing environment variables**
    - All required variables must be set
    - Check Render/Vercel dashboards to verify all are present
 
-4. **Wrong root directory**
+5. **Wrong root directory**
    - Render: `backend` (not root)
    - Vercel: `frontend` (not root)
 
-5. **Build command errors**
+6. **Build command errors**
    - Ensure `requirements.txt` is in `backend/`
    - Ensure `package.json` is in `frontend/`
 
