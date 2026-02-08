@@ -112,7 +112,7 @@ async def _safe_scrape(scraper, base_url: str, path: str) -> dict:
 
 
 async def _extract_intelligence(website_url: str, crawl_results: dict, citations: list) -> dict:
-    """LLM-guided extraction with mandatory citations."""
+    """LLM-guided extraction with mandatory citations - structured for VC due diligence."""
 
     # Build page summaries for the prompt
     page_summaries = []
@@ -144,61 +144,53 @@ PAGES FOUND: {pages_found}
 PAGE CONTENT:
 {combined}
 
-Extract the following structured JSON:
+Extract the following structured JSON (EXACT FORMAT REQUIRED):
 {{
-  "product_intelligence": {{
+  "product_signals": {{
     "product_description": "string with [SOURCE: /path] or not_mentioned",
     "key_features": ["feature [SOURCE: /path]"],
-    "use_cases": ["use case [SOURCE: /path]"],
-    "differentiation_claims": ["claim [SOURCE: /path]"],
-    "api_available": "true/false/not_mentioned [SOURCE: /path]"
+    "api_available": "true | false | not_mentioned",
+    "integrations": ["integration name [SOURCE: /path]"],
+    "platform_mentions": ["platform [SOURCE: /path]"]
   }},
-  "business_model": {{
-    "pricing_model": "subscription | usage | enterprise | freemium | unknown [SOURCE: /path]",
+  "business_model_signals": {{
+    "pricing_model": "subscription | usage | enterprise | not_mentioned",
     "price_points": ["tier: $X/mo [SOURCE: /pricing]"],
-    "free_trial": "true/false/not_mentioned [SOURCE: /path]"
+    "free_trial": "true | false | not_mentioned",
+    "sales_motion": "self_serve | sales_led | not_mentioned"
   }},
-  "customer_validation": {{
-    "customer_logos_count": "number or not_mentioned [SOURCE: /path]",
-    "case_study_count": "number or not_mentioned [SOURCE: /path]",
-    "industries_served": ["industry [SOURCE: /path]"],
-    "notable_customers": ["name [SOURCE: /path]"],
-    "quantified_results": ["result [SOURCE: /path]"]
-  }},
-  "team_signals": {{
-    "team_size_estimate": "number or not_mentioned [SOURCE: /path]",
-    "open_roles_count": "number or not_mentioned [SOURCE: /path]",
-    "engineering_roles_ratio": "high | medium | low | not_mentioned [SOURCE: /path]",
-    "leadership_mentioned": ["name - role [SOURCE: /path]"],
-    "notable_backgrounds": ["background [SOURCE: /path]"]
-  }},
-  "technical_signals": {{
-    "tech_stack_mentions": ["tech [SOURCE: /path]"],
-    "security_certifications": ["cert [SOURCE: /path]"],
-    "docs_quality": "high | medium | low | none [SOURCE: /path]",
-    "api_type": "REST | GraphQL | SDK | not_mentioned [SOURCE: /path]"
+  "customer_validation_signals": {{
+    "customer_logos_count": "number or not_mentioned",
+    "case_study_count": "number or not_mentioned",
+    "named_customers": ["customer name [SOURCE: /path]"],
+    "quantified_outcomes": ["outcome [SOURCE: /path]"]
   }},
   "traction_signals": {{
-    "blog_activity": "active | stale | none [SOURCE: /path]",
-    "recent_announcements": ["announcement [SOURCE: /path]"],
-    "user_volume_claims": "string or not_mentioned [SOURCE: /path]",
-    "growth_metrics": ["metric [SOURCE: /path]"]
+    "blog_last_post_date": "YYYY-MM-DD or not_mentioned",
+    "press_mentions_count": "number or not_mentioned",
+    "announcements": ["announcement [SOURCE: /path]"]
   }},
-  "sales_motion": {{
-    "primary_cta": "string [SOURCE: /path]",
-    "demo_available": "true/false [SOURCE: /path]",
-    "self_serve_signup": "true/false [SOURCE: /path]",
-    "motion_type": "Product-Led | Sales-Led | Hybrid [SOURCE: /path]"
+  "team_hiring_signals": {{
+    "team_page_exists": true | false,
+    "open_roles_count": "number or not_mentioned",
+    "engineering_roles_present": "true | false | not_mentioned"
   }},
-  "compliance": {{
+  "trust_compliance_signals": {{
+    "security_page_exists": true | false,
     "certifications": ["cert [SOURCE: /path]"],
-    "privacy_policy": "exists/not_found",
-    "terms_of_service": "exists/not_found"
+    "privacy_policy_exists": true | false
   }},
   "red_flags": ["flag with [SOURCE: /path]"],
-  "green_flags": ["flag with [SOURCE: /path]"],
-  "overall_assessment": "1-2 sentence summary of website maturity"
-}}"""
+  "green_flags": ["flag with [SOURCE: /path]"]
+}}
+
+IMPORTANT RULES:
+- For boolean fields, use true/false/not_mentioned (no quotes for booleans)
+- For count fields, use number or "not_mentioned" string
+- Every list item must include [SOURCE: /page_path]
+- If a page doesn't exist, mark existence as false
+- If pricing page exists but no pricing shown, mark pricing_model as "not_mentioned"
+"""
 
     system = (
         "You are a VC due diligence analyst. Extract ONLY explicitly stated facts from website pages. "
