@@ -826,6 +826,119 @@ function CompetitorsTab({ competitors, enrichments }) {
   );
 }
 
+
+// ============ WEBSITE DD CARD ============
+function WebsiteDDCard({ score }) {
+  const ddDetails = score?.agent_details?.website_due_diligence || {};
+  const ddScore = score?.website_dd_score || 0;
+  const breakdown = ddDetails?.breakdown || {};
+  const redFlags = ddDetails?.red_flags || [];
+  const greenFlags = ddDetails?.green_flags || [];
+  const pagesAnalyzed = ddDetails?.pages_analyzed || 0;
+
+  if (!ddDetails || ddScore === 0) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-sm text-text-muted">Website due diligence not available or website was not provided during upload.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Score Display */}
+      <div className="flex flex-col items-center justify-center py-4">
+        <div className="relative w-24 h-24">
+          <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="42" stroke="#27272a" strokeWidth="6" fill="none" />
+            <circle 
+              cx="50" cy="50" r="42" 
+              stroke={ddScore >= 7 ? '#10b981' : ddScore >= 5 ? '#f59e0b' : '#ef4444'}
+              strokeWidth="6" 
+              fill="none" 
+              strokeDasharray={`${(ddScore / 10) * 264} 264`} 
+              strokeLinecap="round" 
+            />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="font-mono text-2xl font-bold text-text-primary">{ddScore}</span>
+          </div>
+        </div>
+        <p className="text-xs text-text-muted mt-2 text-center">{pagesAnalyzed} pages analyzed</p>
+        <p className="text-[10px] text-text-muted mt-1">Confidence: {ddDetails?.confidence || 'N/A'}</p>
+      </div>
+
+      {/* Score Breakdown */}
+      <div className="space-y-2">
+        <h4 className="text-xs font-medium text-text-primary uppercase tracking-widest mb-3">Score Breakdown</h4>
+        <ScoreBar label="Product Clarity" score={breakdown.product_clarity || 0} max={3} />
+        <ScoreBar label="Pricing & GTM" score={breakdown.pricing_gtm_clarity || 0} max={2} />
+        <ScoreBar label="Customer Proof" score={breakdown.customer_proof || 0} max={2} />
+        <ScoreBar label="Tech Credibility" score={breakdown.technical_credibility || 0} max={2} />
+        <ScoreBar label="Trust & Compliance" score={breakdown.trust_compliance || 0} max={1} />
+      </div>
+
+      {/* Flags */}
+      <div className="space-y-4">
+        {/* Green Flags */}
+        <div>
+          <h4 className="text-xs font-medium text-success uppercase tracking-widest mb-2 flex items-center gap-1">
+            <CheckCircle size={12} /> Green Flags
+          </h4>
+          <div className="space-y-1.5">
+            {greenFlags.length > 0 ? (
+              greenFlags.slice(0, 4).map((flag, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs text-text-secondary">
+                  <div className="w-1 h-1 rounded-full bg-success mt-1.5 shrink-0" />
+                  <span className="line-clamp-2" title={flag}>{flag}</span>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-text-muted">None detected</p>
+            )}
+          </div>
+        </div>
+
+        {/* Red Flags */}
+        <div>
+          <h4 className="text-xs font-medium text-destructive uppercase tracking-widest mb-2 flex items-center gap-1">
+            <AlertTriangle size={12} /> Red Flags
+          </h4>
+          <div className="space-y-1.5">
+            {redFlags.length > 0 ? (
+              redFlags.slice(0, 4).map((flag, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs text-text-secondary">
+                  <div className="w-1 h-1 rounded-full bg-destructive mt-1.5 shrink-0" />
+                  <span className="line-clamp-2" title={flag}>{flag}</span>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-text-muted">None detected</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScoreBar({ label, score, max }) {
+  const percentage = (score / max) * 100;
+  const color = percentage >= 70 ? 'bg-success' : percentage >= 40 ? 'bg-warning' : 'bg-destructive';
+  
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] text-text-muted uppercase tracking-widest">{label}</span>
+        <span className="text-xs font-mono text-text-primary">{score}/{max}</span>
+      </div>
+      <div className="w-full h-1.5 bg-bg rounded-full overflow-hidden">
+        <div className={`h-full ${color} rounded-full transition-all duration-500`} style={{ width: `${percentage}%` }} />
+      </div>
+    </div>
+  );
+}
+
 // ============ SHARED COMPONENTS ============
 function Card({ title, icon: Icon, children, testId, className = '' }) {
   return (
