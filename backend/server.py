@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from typing import Optional
 import os
 import sys
+import ssl
 import uuid
 from datetime import datetime, timezone
 import json
@@ -40,6 +41,11 @@ if not MONGO_URL or not DB_NAME:
 if not MONGO_URL.startswith("mongodb+srv://") and not MONGO_URL.startswith("mongodb://"):
     raise ValueError("Invalid MongoDB URI format - must start with mongodb:// or mongodb+srv://")
 
+# CRITICAL: Create explicit SSL context with certifi
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+ssl_context.check_hostname = True
+ssl_context.verify_mode = ssl.CERT_REQUIRED
+
 # Create MongoDB client with proper SSL/TLS configuration
 try:
     client = MongoClient(
@@ -47,22 +53,22 @@ try:
         tls=True,
         tlsAllowInvalidCertificates=False,
         tlsCAFile=certifi.where(),
-        serverSelectionTimeoutMS=10000,
-        connectTimeoutMS=10000,
-        socketTimeoutMS=10000,
+        serverSelectionTimeoutMS=30000,  # Increased timeout for SSL handshake
+        connectTimeoutMS=30000,
+        socketTimeoutMS=30000,
         maxPoolSize=50,
         minPoolSize=10,
         retryWrites=True,
         retryReads=True
     )
-    logger.info("✓ MongoDB client initialized successfully")
+    logger.info("✓ MongoDB client configured (connection will be tested on startup)")
 except Exception as e:
-    logger.error(f"✗ MongoDB client initialization failed: {str(e)}")
+    logger.error(f"✗ MongoDB client configuration failed: {str(e)}")
     raise
 
 db = client[DB_NAME]
 
-# Collections
+# Collection references (indexes will be created in startup event)
 companies_col = db["companies"]
 pitch_decks_col = db["pitch_decks"]
 founders_col = db["founders"]
@@ -70,13 +76,6 @@ enrichment_col = db["enrichment_sources"]
 competitors_col = db["competitors"]
 scores_col = db["investment_scores"]
 memos_col = db["investment_memos"]
-
-# Create indexes
-companies_col.create_index("name")
-pitch_decks_col.create_index("company_id")
-founders_col.create_index("company_id")
-enrichment_col.create_index("company_id")
-scores_col.create_index("company_id")
 
 
 def serialize_doc(doc):
@@ -100,16 +99,29 @@ def validate_object_id(id_str: str) -> ObjectId:
 
 @app.on_event("startup")
 async def startup_event():
-    """Startup event to verify MongoDB connection and configure server."""
+    """Startup event to verify MongoDB connection, create indexes, and configure server."""
     # Verify MongoDB connection
     try:
         client.admin.command('ping')
-        logger.info("✓ MongoDB connection verified on startup")
+        logger.info("✓ Successfully connected to MongoDB")
     except (ConnectionFailure, ServerSelectionTimeoutError) as e:
         logger.error(f"✗ MongoDB connection failed during startup: {str(e)}")
-        logger.warning("⚠ Application starting but MongoDB connection is not available")
+        raise
     except Exception as e:
         logger.error(f"✗ MongoDB connection error during startup: {str(e)}")
+        raise
+    
+    # Create indexes (moved from module level to avoid SSL issues during import)
+    try:
+        companies_col.create_index("name")
+        pitch_decks_col.create_index("company_id")
+        founders_col.create_index("company_id")
+        enrichment_col.create_index("company_id")
+        scores_col.create_index("company_id")
+        logger.info("✓ Database indexes created")
+    except Exception as e:
+        logger.error(f"✗ Index creation failed: {str(e)}")
+        # Don't raise - indexes might already exist
     
     port = int(os.environ.get("PORT", 8000))
     logger.info(f"Server configured to run on port {port}")

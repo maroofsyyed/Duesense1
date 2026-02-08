@@ -4,12 +4,16 @@ FROM python:3.11.9-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies INCLUDING latest OpenSSL
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
+    libssl-dev \
+    ca-certificates \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get upgrade -y openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
 
 # Copy requirements file
 COPY requirements.txt .
