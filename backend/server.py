@@ -114,10 +114,20 @@ async def delete_company(company_id: str):
 # ============ DECK UPLOAD & PROCESSING ============
 
 @app.post("/api/decks/upload")
-async def upload_deck(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_deck(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    company_website: Optional[str] = Form(None),
+):
     file_ext = file.filename.split(".")[-1].lower()
     if file_ext not in ["pdf", "pptx", "ppt"]:
         raise HTTPException(400, "Only PDF and PPTX files are supported")
+
+    # Validate website URL if provided
+    if company_website:
+        company_website = company_website.strip()
+        if company_website and not company_website.startswith("http"):
+            company_website = "https://" + company_website
 
     content = await file.read()
     file_size = len(content)
@@ -130,10 +140,11 @@ async def upload_deck(background_tasks: BackgroundTasks, file: UploadFile = File
         "name": "Processing...",
         "status": "processing",
         "stage": None,
-        "website": None,
+        "website": company_website,
         "tagline": None,
         "founded_year": None,
         "hq_location": None,
+        "website_source": "user_provided" if company_website else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).inserted_id)
@@ -150,6 +161,7 @@ async def upload_deck(background_tasks: BackgroundTasks, file: UploadFile = File
         "file_path": file_path,
         "file_name": file.filename,
         "file_size": file_size,
+        "website_source": company_website,
         "processing_status": "uploading",
         "extracted_data": None,
         "error_message": None,
@@ -157,13 +169,14 @@ async def upload_deck(background_tasks: BackgroundTasks, file: UploadFile = File
     }).inserted_id)
 
     # Process in background
-    background_tasks.add_task(process_deck_pipeline, deck_id, company_id, file_path, file_ext)
+    background_tasks.add_task(process_deck_pipeline, deck_id, company_id, file_path, file_ext, company_website)
 
     return {
         "deck_id": deck_id,
         "company_id": company_id,
         "status": "processing",
-        "message": "Deck uploaded. Processing started.",
+        "website_provided": bool(company_website),
+        "message": "Deck uploaded. Processing started." + (" Website due diligence will run in parallel." if company_website else ""),
     }
 
 
