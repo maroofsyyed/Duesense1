@@ -47,7 +47,7 @@ export default function Upload() {
     setError(null);
 
     try {
-      const res = await uploadDeck(file);
+      const res = await uploadDeck(file, companyWebsite);
       const { deck_id, company_id } = res.data;
       setCompanyId(company_id);
       setUploading(false);
