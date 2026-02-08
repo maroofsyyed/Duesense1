@@ -90,6 +90,197 @@ async def _agent_website_intelligence(enrichment: dict) -> dict:
     }
 
 
+async def _agent_website_due_diligence(enrichment: dict) -> dict:
+    """
+    Score Website Due Diligence signals (0-10 scale).
+    
+    Scoring Rubric:
+    - Product clarity: 3pts
+    - Pricing & GTM clarity: 2pts
+    - Customer proof: 2pts
+    - Technical credibility: 2pts
+    - Trust & compliance: 1pt
+    Total: 10pts
+    """
+    # Find website_due_diligence enrichment
+    dd_data = None
+    if isinstance(enrichment, dict):
+        # Check if enrichment is the full dict with website_due_diligence key
+        if "website_due_diligence" in enrichment:
+            dd_data = enrichment["website_due_diligence"]
+        # Or if it's a list of enrichment records, find the right one
+        elif "data" in enrichment:
+            dd_data = enrichment.get("data", {})
+    
+    if not dd_data or dd_data.get("status") == "incomplete":
+        return {
+            "total_website_dd_score": 0,
+            "reasoning": "Website due diligence not available or incomplete",
+            "confidence": "LOW",
+            "breakdown": {
+                "product_clarity": 0,
+                "pricing_gtm_clarity": 0,
+                "customer_proof": 0,
+                "technical_credibility": 0,
+                "trust_compliance": 0,
+            },
+            "red_flags": ["Website data unavailable"],
+            "green_flags": [],
+        }
+    
+    extraction = dd_data.get("extraction", {})
+    
+    # Extract signals
+    product_signals = extraction.get("product_signals", {})
+    business_signals = extraction.get("business_model_signals", {})
+    customer_signals = extraction.get("customer_validation_signals", {})
+    traction_signals = extraction.get("traction_signals", {})
+    team_signals = extraction.get("team_hiring_signals", {})
+    trust_signals = extraction.get("trust_compliance_signals", {})
+    
+    # Initialize scores
+    product_score = 0
+    pricing_gtm_score = 0
+    customer_score = 0
+    technical_score = 0
+    trust_score = 0
+    
+    red_flags = []
+    green_flags = []
+    
+    # 1. PRODUCT CLARITY (0-3 points)
+    if product_signals.get("product_description") and product_signals["product_description"] != "not_mentioned":
+        product_score += 1.5
+        green_flags.append("Clear product description")
+    else:
+        red_flags.append("No clear product description")
+    
+    if product_signals.get("key_features") and len(product_signals["key_features"]) > 0:
+        product_score += 1
+        green_flags.append(f"{len(product_signals['key_features'])} key features documented")
+    else:
+        red_flags.append("No key features listed")
+    
+    api_available = product_signals.get("api_available", "not_mentioned")
+    if api_available == "true" or api_available == True:
+        product_score += 0.5
+        green_flags.append("API available")
+    
+    # 2. PRICING & GTM CLARITY (0-2 points)
+    pricing_model = business_signals.get("pricing_model", "not_mentioned")
+    if pricing_model not in ["not_mentioned", "unknown", None]:
+        pricing_gtm_score += 1
+        green_flags.append(f"Pricing model: {pricing_model}")
+    else:
+        red_flags.append("No clear pricing model")
+    
+    price_points = business_signals.get("price_points", [])
+    if price_points and len(price_points) > 0:
+        pricing_gtm_score += 0.5
+        green_flags.append("Pricing tiers visible")
+    else:
+        red_flags.append("No pricing information")
+    
+    sales_motion = business_signals.get("sales_motion", "not_mentioned")
+    if sales_motion != "not_mentioned":
+        pricing_gtm_score += 0.5
+        green_flags.append(f"Sales motion: {sales_motion}")
+    
+    # 3. CUSTOMER PROOF (0-2 points)
+    logos_count = customer_signals.get("customer_logos_count", "not_mentioned")
+    if logos_count != "not_mentioned" and logos_count not in [None, 0, "0"]:
+        try:
+            count = int(logos_count) if isinstance(logos_count, (int, str)) else 0
+            if count > 0:
+                customer_score += 1
+                green_flags.append(f"{count} customer logos displayed")
+        except:
+            pass
+    else:
+        red_flags.append("No customer logos")
+    
+    case_studies = customer_signals.get("case_study_count", "not_mentioned")
+    if case_studies != "not_mentioned" and case_studies not in [None, 0, "0"]:
+        try:
+            count = int(case_studies) if isinstance(case_studies, (int, str)) else 0
+            if count > 0:
+                customer_score += 0.5
+                green_flags.append(f"{count} case studies")
+        except:
+            pass
+    
+    named_customers = customer_signals.get("named_customers", [])
+    if named_customers and len(named_customers) > 0:
+        customer_score += 0.5
+        green_flags.append(f"{len(named_customers)} named customers")
+    
+    # 4. TECHNICAL CREDIBILITY (0-2 points)
+    api_available = product_signals.get("api_available", "not_mentioned")
+    if api_available == "true" or api_available == True:
+        technical_score += 1
+        # Already added to green flags above
+    
+    integrations = product_signals.get("integrations", [])
+    if integrations and len(integrations) > 0:
+        technical_score += 0.5
+        green_flags.append(f"{len(integrations)} integrations")
+    
+    certifications = trust_signals.get("certifications", [])
+    if certifications and len(certifications) > 0:
+        technical_score += 0.5
+        # Will add to green flags in trust section
+    
+    # 5. TRUST & COMPLIANCE (0-1 point)
+    security_page = trust_signals.get("security_page_exists", False)
+    if security_page:
+        trust_score += 0.5
+        green_flags.append("Security page exists")
+    else:
+        red_flags.append("No security page")
+    
+    privacy_policy = trust_signals.get("privacy_policy_exists", False)
+    if privacy_policy:
+        trust_score += 0.25
+        green_flags.append("Privacy policy exists")
+    
+    if certifications and len(certifications) > 0:
+        trust_score += 0.25
+        green_flags.append(f"Certifications: {', '.join(certifications[:3])}")
+    
+    # Add extracted red/green flags
+    extracted_red = extraction.get("red_flags", [])
+    extracted_green = extraction.get("green_flags", [])
+    
+    if extracted_red:
+        red_flags.extend(extracted_red[:3])
+    if extracted_green:
+        green_flags.extend(extracted_green[:3])
+    
+    # Calculate total (capped at 10)
+    total = min(10, product_score + pricing_gtm_score + customer_score + technical_score + trust_score)
+    
+    # Confidence based on data availability
+    pages_crawled = dd_data.get("pages_crawled", 0)
+    confidence = "HIGH" if pages_crawled >= 10 else "MEDIUM" if pages_crawled >= 5 else "LOW"
+    
+    return {
+        "total_website_dd_score": round(total, 1),
+        "breakdown": {
+            "product_clarity": round(product_score, 1),
+            "pricing_gtm_clarity": round(pricing_gtm_score, 1),
+            "customer_proof": round(customer_score, 1),
+            "technical_credibility": round(technical_score, 1),
+            "trust_compliance": round(trust_score, 1),
+        },
+        "red_flags": list(set(red_flags))[:5],
+        "green_flags": list(set(green_flags))[:8],
+        "reasoning": f"Website DD Score: {round(total, 1)}/10 based on {pages_crawled} pages crawled",
+        "confidence": confidence,
+        "pages_analyzed": pages_crawled,
+    }
+
+
+
 async def calculate_investment_score(company_id: str, extracted: dict, enrichment: dict) -> dict:
     """Run all 6 agents in parallel and compile final score."""
 
