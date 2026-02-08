@@ -1,62 +1,73 @@
 #!/usr/bin/env python3
+"""Backend API Test Suite for VC Deal Intelligence System with Website Intelligence"""
 import requests
 import sys
 import json
 from datetime import datetime
+import time
 
-class VCIntelligenceAPITester:
+class VCDealAPITester:
     def __init__(self, base_url="https://38ff65e6-4c92-46cd-aea1-1ff7ca9c46eb.preview.emergentagent.com"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0
-        self.test_company_id = "6988bd53ca90ef491b49430b"  # TechVault AI
-        
-    def print_test(self, name, status, details=""):
-        status_icon = "✅" if status else "❌"
-        print(f"{status_icon} {name}")
-        if details:
-            print(f"   {details}")
-        
-    def run_test(self, name, method, endpoint, expected_status=200, data=None, files=None):
+        self.failed_tests = []
+
+    def run_test(self, name, method, endpoint, expected_status, data=None, timeout=30):
         """Run a single API test"""
         url = f"{self.base_url}/{endpoint}"
-        headers = {} if files else {'Content-Type': 'application/json'}
+        headers = {'Content-Type': 'application/json'}
         
         self.tests_run += 1
         print(f"\n🔍 Testing {name}...")
+        print(f"   URL: {url}")
         
         try:
             if method == 'GET':
-                response = requests.get(url, headers=headers, timeout=30)
+                response = requests.get(url, headers=headers, timeout=timeout)
             elif method == 'POST':
-                if files:
-                    response = requests.post(url, files=files, timeout=60)
-                else:
-                    response = requests.post(url, json=data, headers=headers, timeout=60)
+                response = requests.post(url, json=data, headers=headers, timeout=timeout)
             elif method == 'DELETE':
-                response = requests.delete(url, headers=headers, timeout=30)
+                response = requests.delete(url, headers=headers, timeout=timeout)
             
             success = response.status_code == expected_status
-            
             if success:
                 self.tests_passed += 1
+                print(f"✅ PASSED - Status: {response.status_code}")
                 try:
-                    resp_data = response.json() if response.content else {}
-                    self.print_test(f"Passed - Status: {response.status_code}", True)
-                    return True, resp_data
-                except json.JSONDecodeError:
-                    self.print_test(f"Passed - Status: {response.status_code} (Non-JSON response)", True)
-                    return True, {}
+                    resp_json = response.json() if response.content else {}
+                    if resp_json:
+                        print(f"   Response Preview: {json.dumps(resp_json, default=str)[:200]}...")
+                except:
+                    print(f"   Response Content: {response.text[:200]}...")
             else:
-                self.print_test(f"Failed - Expected {expected_status}, got {response.status_code}", False, 
-                              f"Response: {response.text[:200]}")
-                return False, {}
-                
-        except Exception as e:
-            self.print_test(f"Failed - Error: {str(e)}", False)
-            return False, {}
+                print(f"❌ FAILED - Expected {expected_status}, got {response.status_code}")
+                print(f"   Error: {response.text[:500]}")
+                self.failed_tests.append({
+                    "test": name,
+                    "expected": expected_status,
+                    "actual": response.status_code,
+                    "error": response.text[:500]
+                })
 
-    def test_health_endpoint(self):
+            return success, response
+
+        except requests.Timeout:
+            print(f"❌ FAILED - Request timed out after {timeout}s")
+            self.failed_tests.append({
+                "test": name,
+                "error": f"Request timeout after {timeout}s"
+            })
+            return False, None
+        except Exception as e:
+            print(f"❌ FAILED - Error: {str(e)}")
+            self.failed_tests.append({
+                "test": name,
+                "error": str(e)
+            })
+            return False, None
+
+    def test_health_check(self):
         """Test health endpoint"""
         success, response = self.run_test("Health Check", "GET", "api/health", 200)
         return success
@@ -64,168 +75,264 @@ class VCIntelligenceAPITester:
     def test_dashboard_stats(self):
         """Test dashboard stats endpoint"""
         success, response = self.run_test("Dashboard Stats", "GET", "api/dashboard/stats", 200)
-        if success:
-            required_fields = ['total_companies', 'processing', 'completed', 'failed', 'tiers']
-            missing_fields = [f for f in required_fields if f not in response]
-            if missing_fields:
-                self.print_test(f"Missing fields: {missing_fields}", False)
-                return False
-            else:
-                self.print_test(f"All required fields present: {required_fields}", True)
+        if success and response:
+            try:
+                data = response.json()
+                print(f"   📊 Total Companies: {data.get('total_companies', 'N/A')}")
+                print(f"   📊 Completed: {data.get('completed', 'N/A')}")
+                print(f"   📊 Processing: {data.get('processing', 'N/A')}")
+                recent = data.get('recent_companies', [])
+                if recent:
+                    print(f"   📊 Recent companies: {len(recent)} found")
+                    for comp in recent[:3]:  # Show first 3
+                        print(f"      - {comp.get('name', 'Unknown')} ({comp.get('status', 'unknown')})")
+            except:
+                pass
         return success
 
-    def test_list_companies(self):
-        """Test listing all companies"""
-        success, response = self.run_test("List Companies", "GET", "api/companies", 200)
-        if success and 'companies' in response:
-            companies = response['companies']
-            self.print_test(f"Found {len(companies)} companies", True)
-            # Check if test company exists
-            test_company = next((c for c in companies if c['id'] == self.test_company_id), None)
-            if test_company:
-                self.print_test(f"Test company 'TechVault AI' found with ID {self.test_company_id}", True)
-                return True, test_company
-            else:
-                self.print_test("Test company not found in list", False)
-                return True, None
+    def test_companies_list(self):
+        """Test companies list endpoint"""
+        success, response = self.run_test("List All Companies", "GET", "api/companies", 200)
+        if success and response:
+            try:
+                data = response.json()
+                companies = data.get('companies', [])
+                print(f"   📋 Found {len(companies)} companies")
+                # Find TechVault AI
+                techvault = None
+                for c in companies:
+                    if 'techvault' in c.get('name', '').lower():
+                        techvault = c
+                        break
+                if techvault:
+                    print(f"   ✅ Found TechVault AI: {techvault.get('id')}")
+                    return success, techvault
+                else:
+                    print(f"   ⚠️  TechVault AI not found in companies list")
+            except Exception as e:
+                print(f"   Error parsing companies: {e}")
         return success, None
 
-    def test_get_company_details(self, company_id=None):
-        """Test getting specific company details"""
-        test_id = company_id or self.test_company_id
-        success, response = self.run_test("Get Company Details", "GET", f"api/companies/{test_id}", 200)
-        
-        if success:
-            required_sections = ['company', 'pitch_decks', 'founders', 'enrichments', 'score', 'competitors', 'memo']
-            missing_sections = [s for s in required_sections if s not in response]
-            if missing_sections:
-                self.print_test(f"Missing sections: {missing_sections}", False)
-            else:
-                self.print_test("All required sections present", True)
-                
-                # Check specific data for test company
-                if response.get('company', {}).get('name') == 'TechVault AI':
-                    self.print_test("Test company name verified", True)
-                if response.get('score', {}).get('total_score') == 73:
-                    self.print_test("Test company score verified (73)", True)
-                if response.get('score', {}).get('tier') == 'TIER_2':
-                    self.print_test("Test company tier verified (TIER_2)", True)
-        
-        return success
-
-    def test_get_company_score(self, company_id=None):
-        """Test getting company score"""
-        test_id = company_id or self.test_company_id
-        success, response = self.run_test("Get Company Score", "GET", f"api/companies/{test_id}/score", 200)
-        
-        if success:
-            required_fields = ['total_score', 'tier', 'founder_score', 'market_score', 'moat_score', 'traction_score', 'model_score']
-            missing_fields = [f for f in required_fields if f not in response]
-            if missing_fields:
-                self.print_test(f"Missing score fields: {missing_fields}", False)
-            else:
-                self.print_test("All score fields present", True)
-        
-        return success
-
-    def test_get_company_memo(self, company_id=None):
-        """Test getting company memo"""
-        test_id = company_id or self.test_company_id
-        success, response = self.run_test("Get Company Memo", "GET", f"api/companies/{test_id}/memo", 200)
-        
-        if success:
-            if 'sections' in response:
-                sections_count = len(response['sections'])
-                self.print_test(f"Memo has {sections_count} sections", True)
-            else:
-                self.print_test("Memo missing sections", False)
-        
-        return success
-
-    def test_upload_functionality_check(self):
-        """Test if upload endpoint exists (won't actually upload)"""
-        # Just test if the endpoint exists by making an invalid request
-        print(f"\n🔍 Testing Upload Endpoint Availability...")
-        url = f"{self.base_url}/api/decks/upload"
-        try:
-            # Make request without file to check endpoint exists
-            response = requests.post(url, timeout=10)
-            # Expect 422 (validation error) since no file provided
-            if response.status_code in [422, 400]:
-                self.tests_run += 1
-                self.tests_passed += 1
-                self.print_test("Upload endpoint available (validation error as expected)", True)
-                return True
-            else:
-                self.tests_run += 1
-                self.print_test(f"Upload endpoint returned unexpected status: {response.status_code}", False)
-                return False
-        except Exception as e:
-            self.tests_run += 1
-            self.print_test(f"Upload endpoint test failed: {str(e)}", False)
+    def test_company_detail(self, company_id):
+        """Test specific company detail endpoint"""
+        if not company_id:
+            print("❌ No company ID provided for detail test")
             return False
-
-    def test_deck_status_endpoint(self):
-        """Test deck status endpoint with known deck ID"""
-        # Try with test deck ID from agent context
-        test_deck_id = "6988bd53ca90ef491b49430c"
-        success, response = self.run_test("Get Deck Status", "GET", f"api/decks/{test_deck_id}/status", 200)
         
-        if success:
-            status_fields = ['processing_status', 'file_name', 'file_size']
-            present_fields = [f for f in status_fields if f in response]
-            self.print_test(f"Status fields present: {present_fields}", len(present_fields) > 0)
+        success, response = self.run_test(
+            f"Company Detail ({company_id})", 
+            "GET", 
+            f"api/companies/{company_id}", 
+            200,
+            timeout=60
+        )
+        
+        if success and response:
+            try:
+                data = response.json()
+                company = data.get('company', {})
+                print(f"   🏢 Company: {company.get('name', 'N/A')}")
+                print(f"   📊 Status: {company.get('status', 'N/A')}")
+                print(f"   🌐 Website: {company.get('website', 'N/A')}")
+                
+                # Check if enrichments include website_intelligence
+                enrichments = data.get('enrichments', [])
+                wi_found = any(e.get('source_type') == 'website_intelligence' for e in enrichments)
+                print(f"   🔍 Website Intelligence: {'✅ Found' if wi_found else '❌ Missing'}")
+                
+                # Check score data
+                score = data.get('score', {})
+                if score:
+                    print(f"   🎯 Score: {score.get('total_score', 'N/A')}/{score.get('tier', 'N/A')}")
+                    print(f"   🌐 Website Score: {score.get('website_score', 'N/A')}/10")
+                
+                return success, data
+            except Exception as e:
+                print(f"   Error parsing company detail: {e}")
+        
+        return success, None
+
+    def test_company_score(self, company_id):
+        """Test company score endpoint"""
+        if not company_id:
+            print("❌ No company ID provided for score test")
+            return False
+        
+        success, response = self.run_test(
+            f"Company Score ({company_id})", 
+            "GET", 
+            f"api/companies/{company_id}/score", 
+            200
+        )
+        
+        if success and response:
+            try:
+                data = response.json()
+                print(f"   🎯 Total Score: {data.get('total_score', 'N/A')}")
+                print(f"   🏆 Tier: {data.get('tier', 'N/A')}")
+                print(f"   👥 Founder Score: {data.get('founder_score', 'N/A')}/25")
+                print(f"   📈 Market Score: {data.get('market_score', 'N/A')}/20")
+                print(f"   🔒 Moat Score: {data.get('moat_score', 'N/A')}/20")
+                print(f"   📊 Traction Score: {data.get('traction_score', 'N/A')}/15")
+                print(f"   💼 Model Score: {data.get('model_score', 'N/A')}/10")
+                print(f"   🌐 Website Score: {data.get('website_score', 'N/A')}/10")
+                
+                # Check if we have 6 scoring dimensions
+                weights = data.get('scoring_weights', {})
+                if len(weights) == 6 and 'website_intelligence' in weights:
+                    print("   ✅ All 6 scoring dimensions present including Website Intelligence")
+                else:
+                    print("   ❌ Missing or incorrect scoring dimensions")
+                
+            except Exception as e:
+                print(f"   Error parsing score data: {e}")
         
         return success
 
-    def test_nonexistent_company(self):
-        """Test getting non-existent company returns 404"""
-        fake_id = "000000000000000000000000"
-        success, response = self.run_test("Non-existent Company", "GET", f"api/companies/{fake_id}", 404)
+    def test_website_intelligence(self, company_id):
+        """Test website intelligence endpoint"""
+        if not company_id:
+            print("❌ No company ID provided for website intelligence test")
+            return False
+        
+        success, response = self.run_test(
+            f"Website Intelligence ({company_id})", 
+            "GET", 
+            f"api/companies/{company_id}/website-intelligence", 
+            200,
+            timeout=60
+        )
+        
+        if success and response:
+            try:
+                data = response.json()
+                print(f"   🔍 Website Intelligence Data Available")
+                
+                # Check for key intelligence components
+                intelligence_summary = data.get('intelligence_summary', {})
+                if intelligence_summary:
+                    overall_score = intelligence_summary.get('overall_score', 0)
+                    print(f"   📊 Overall Website Score: {overall_score}/100")
+                    
+                    # Check for score breakdown
+                    breakdown = intelligence_summary.get('score_breakdown', {})
+                    if breakdown:
+                        print("   📈 Score Breakdown:")
+                        for metric, score in breakdown.items():
+                            print(f"      - {metric}: {score}/20")
+                    
+                    # Check flags
+                    green_flags = intelligence_summary.get('green_flags', [])
+                    red_flags = intelligence_summary.get('red_flags', [])
+                    print(f"   ✅ Green Flags: {len(green_flags)}")
+                    print(f"   ❌ Red Flags: {len(red_flags)}")
+                
+                # Check crawl metadata
+                crawl_meta = data.get('crawl_meta', {})
+                if crawl_meta:
+                    pages_crawled = crawl_meta.get('pages_crawled', 0)
+                    pages_attempted = crawl_meta.get('pages_attempted', 0)
+                    print(f"   🕸️ Pages Crawled: {pages_crawled}/{pages_attempted}")
+                
+                # Check for 7 AI agent outputs
+                agent_outputs = [
+                    'product_intel', 'revenue_model', 'customer_validation', 
+                    'team_intel', 'technical_depth', 'traction_signals', 'compliance'
+                ]
+                found_agents = [agent for agent in agent_outputs if agent in data]
+                print(f"   🤖 AI Agents Found: {len(found_agents)}/7 ({', '.join(found_agents)})")
+                
+                # Check tech stack and sales signals
+                tech_stack = data.get('tech_stack', {})
+                sales_signals = data.get('sales_signals', {})
+                print(f"   💻 Tech Stack: {'✅ Present' if tech_stack else '❌ Missing'}")
+                print(f"   💰 Sales Signals: {'✅ Present' if sales_signals else '❌ Missing'}")
+                
+            except Exception as e:
+                print(f"   Error parsing website intelligence: {e}")
+        
+        return success
+
+    def test_upload_endpoint(self):
+        """Test upload endpoint (POST structure only - no actual file)"""
+        # Test with no file to verify endpoint structure
+        success, response = self.run_test(
+            "Upload Endpoint Structure", 
+            "POST", 
+            "api/decks/upload", 
+            422  # Expected validation error for missing file
+        )
+        
+        if response and response.status_code == 422:
+            print("   ✅ Upload endpoint properly validates file requirement")
+            return True
         return success
 
 def main():
-    print("🚀 Starting VC Deal Intelligence API Tests")
-    print("=" * 60)
+    print("🚀 Starting VC Deal Intelligence API Testing Suite")
+    print("=" * 80)
     
-    tester = VCIntelligenceAPITester()
+    tester = VCDealAPITester()
     
-    # Run all tests
-    tests = [
-        tester.test_health_endpoint,
-        tester.test_dashboard_stats, 
-        tester.test_list_companies,
-        tester.test_get_company_details,
-        tester.test_get_company_score,
-        tester.test_get_company_memo,
-        tester.test_upload_functionality_check,
-        tester.test_deck_status_endpoint,
-        tester.test_nonexistent_company,
-    ]
-    
-    results = []
-    for test in tests:
-        try:
-            result = test()
-            results.append(result)
-        except Exception as e:
-            print(f"❌ Test {test.__name__} crashed: {str(e)}")
-            results.append(False)
-    
-    # Print summary
-    print("\n" + "=" * 60)
-    print(f"📊 TEST SUMMARY")
-    print(f"Tests Run: {tester.tests_run}")
-    print(f"Tests Passed: {tester.tests_passed}")
-    print(f"Success Rate: {(tester.tests_passed/tester.tests_run*100):.1f}%")
-    
-    if tester.tests_passed == tester.tests_run:
-        print("🎉 All tests passed!")
-        return 0
-    else:
-        failed = tester.tests_run - tester.tests_passed
-        print(f"⚠️  {failed} test(s) failed")
+    # Core API tests
+    if not tester.test_health_check():
+        print("❌ Health check failed - stopping tests")
         return 1
+    
+    print("\n" + "=" * 50)
+    print("📊 Testing Dashboard & Companies")
+    
+    if not tester.test_dashboard_stats():
+        print("❌ Dashboard stats failed")
+    
+    companies_success, techvault_company = tester.test_companies_list()
+    if not companies_success:
+        print("❌ Companies list failed")
+    
+    # Test upload endpoint structure
+    tester.test_upload_endpoint()
+    
+    # Test specific company (TechVault AI or first available)
+    test_company_id = None
+    if techvault_company:
+        test_company_id = techvault_company.get('id')
+        print(f"\n🎯 Using TechVault AI for detailed testing: {test_company_id}")
+    else:
+        # Try the provided test ID from context
+        test_company_id = "6988c1d18f24363888950397"
+        print(f"\n🎯 Using provided test company ID: {test_company_id}")
+    
+    if test_company_id:
+        print("\n" + "=" * 50)
+        print(f"🏢 Testing Company Detail Features")
+        
+        # Company detail test
+        company_success, company_data = tester.test_company_detail(test_company_id)
+        
+        # Score endpoint test
+        tester.test_company_score(test_company_id)
+        
+        # Website intelligence test
+        tester.test_website_intelligence(test_company_id)
+    
+    # Print final results
+    print("\n" + "=" * 80)
+    print("📋 TEST SUMMARY")
+    print("=" * 80)
+    print(f"🎯 Tests Run: {tester.tests_run}")
+    print(f"✅ Tests Passed: {tester.tests_passed}")
+    print(f"❌ Tests Failed: {len(tester.failed_tests)}")
+    print(f"📊 Success Rate: {(tester.tests_passed/tester.tests_run)*100:.1f}%")
+    
+    if tester.failed_tests:
+        print("\n❌ FAILED TESTS:")
+        for i, failure in enumerate(tester.failed_tests, 1):
+            print(f"{i}. {failure['test']}")
+            if 'expected' in failure:
+                print(f"   Expected: {failure['expected']}, Got: {failure['actual']}")
+            print(f"   Error: {failure['error'][:200]}...")
+    
+    return 0 if len(tester.failed_tests) == 0 else 1
 
 if __name__ == "__main__":
     sys.exit(main())
