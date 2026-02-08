@@ -376,12 +376,19 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
     return score_data
 
 
-async def _generate_thesis(extracted, total, tier, founder, market, moat, traction, model, website) -> dict:
+async def _generate_thesis(extracted, total, tier, founder, market, moat, traction, model, website, website_dd) -> dict:
     company_name = extracted.get("company", {}).get("name", "the company")
 
     # Collect website red/green flags for thesis
     red_flags = website.get("red_flags", [])
     green_flags = website.get("green_flags", [])
+    
+    # Add website DD flags
+    dd_red_flags = website_dd.get("red_flags", [])
+    dd_green_flags = website_dd.get("green_flags", [])
+    
+    all_red_flags = (red_flags + dd_red_flags)[:5]
+    all_green_flags = (green_flags + dd_green_flags)[:5]
 
     prompt = f"""Based on the investment analysis of {company_name}, generate:
 
@@ -393,16 +400,17 @@ SCORES:
 - Traction: {traction.get('total_traction_score', 'N/A')}/15 - {str(traction.get('reasoning', 'N/A'))[:150]}
 - Business Model: {model.get('total_model_score', 'N/A')}/10 - {str(model.get('reasoning', 'N/A'))[:150]}
 - Website Intelligence: {website.get('total_website_score', 'N/A')}/10 - {str(website.get('one_line_verdict', 'N/A'))[:150]}
+- Website Due Diligence: {website_dd.get('total_website_dd_score', 'N/A')}/10 - {str(website_dd.get('reasoning', 'N/A'))[:150]}
 
-WEBSITE RED FLAGS: {red_flags[:3]}
-WEBSITE GREEN FLAGS: {green_flags[:3]}
+WEBSITE RED FLAGS: {all_red_flags}
+WEBSITE GREEN FLAGS: {all_green_flags}
 
 COMPANY: {_safe_json(extracted.get('company', {}))}
 
 Respond with JSON:
 {{
   "recommendation": "STRONG BUY | BUY | HOLD | PASS",
-  "investment_thesis": "2-3 paragraph thesis incorporating website intelligence insights",
+  "investment_thesis": "2-3 paragraph thesis incorporating website intelligence and due diligence insights",
   "top_reasons": ["reason 1", "reason 2", "reason 3"],
   "top_risks": ["risk 1", "risk 2", "risk 3"],
   "expected_return": "Nx in Y years"
