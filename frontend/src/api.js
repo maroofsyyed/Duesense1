@@ -12,9 +12,12 @@ export const getDashboardStats = () => api.get('/api/dashboard/stats');
 export const getCompanies = () => api.get('/api/companies');
 export const getCompany = (id) => api.get(`/api/companies/${id}`);
 export const deleteCompany = (id) => api.delete(`/api/companies/${id}`);
-export const uploadDeck = (file) => {
+export const uploadDeck = (file, companyWebsite) => {
   const formData = new FormData();
   formData.append('file', file);
+  if (companyWebsite) {
+    formData.append('company_website', companyWebsite);
+  }
   return api.post('/api/decks/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
