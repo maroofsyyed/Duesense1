@@ -60,7 +60,9 @@ Fill in the following:
 - **Start Command:** `uvicorn server:app --host 0.0.0.0 --port $PORT`
   - ⚠️ **CRITICAL:** The command is `uvicorn` (not `vicorn`). This is a common typo that will cause deployment failures.
 
-**Important:** Render automatically sets the `PORT` environment variable. Your app reads it via `os.environ.get("PORT", 8000)`.
+**Important:** 
+- Render automatically sets the `PORT` environment variable. Your app reads it via `os.environ.get("PORT", 8000)`.
+- **Python Version:** The repository includes `backend/runtime.txt` specifying Python 3.11.9. This version is required for MongoDB Atlas SSL/TLS compatibility. Render will automatically use this version. If you need to change it, update `runtime.txt` or set `PYTHON_VERSION=3.11.9` in Render environment variables.
 
 ### Step 4: Add Environment Variables
 
@@ -72,6 +74,11 @@ In the **"Environment"** section, add these variables one by one:
 MONGO_URL
 ```
 - **Value:** Your MongoDB Atlas connection string (starts with `mongodb+srv://`)
+- **Format:** `mongodb+srv://<username>:<password>@cluster.mongodb.net/<database>?retryWrites=true&w=majority`
+- **Important:** 
+  - Use `MONGO_URL` (not `MONGODB_URI`)
+  - Password should be URL-encoded if it contains special characters
+  - No spaces in the connection string
 
 ```
 DB_NAME
@@ -150,6 +157,11 @@ Add environment variables for:
    - Install dependencies from `requirements.txt`
    - Start your FastAPI server
 4. Wait 3-5 minutes for the first deployment
+
+**Note:** If you need to change Python version or update `runtime.txt` after initial deployment:
+- Go to Render dashboard → Your Service → Manual Deploy
+- Select **"Clear build cache & deploy"**
+- This ensures Render uses the Python version from `runtime.txt`
 
 ### Step 6: Get Your Backend URL
 
@@ -319,9 +331,15 @@ Run through this checklist to ensure everything works:
   - Visit: `https://your-backend-url.onrender.com/api/health`
   - Expected: `{"status": "ok", "service": "vc-deal-intelligence"}`
 
+- [ ] **Python Version**
+  - Check Render logs for: "Using Python version 3.11.9"
+  - Verify `backend/runtime.txt` contains `python-3.11.9`
+  - If wrong version, clear build cache and redeploy
+
 - [ ] **MongoDB Connection**
   - Check Render logs for MongoDB connection errors
   - If errors, verify `MONGO_URL` and `DB_NAME` are correct
+  - Verify no SSL/TLS handshake errors (indicates Python version issue)
 
 - [ ] **API Endpoints**
   - Test: `https://your-backend-url.onrender.com/api/companies`
@@ -394,19 +412,68 @@ Run through this checklist to ensure everything works:
 5. Save changes and redeploy
 6. **Correct command:** `uvicorn server:app --host 0.0.0.0 --port $PORT`
 
+#### Problem: Python version SSL/TLS compatibility issues
+
+**Symptoms:**
+- MongoDB connection fails with SSL/TLS handshake errors
+- Logs show: `SSL: CERTIFICATE_VERIFY_FAILED` or similar
+- Application fails to connect to MongoDB Atlas
+
+**Root Cause:**
+- Python 3.13.4 has known SSL/TLS compatibility issues with MongoDB Atlas
+- Application requires Python 3.11.9 for proper MongoDB connectivity
+
+**Solutions:**
+1. **Verify `runtime.txt` exists:**
+   - Check that `backend/runtime.txt` contains: `python-3.11.9`
+   - If missing or incorrect, create/update the file
+
+2. **Clear Build Cache:**
+   - In Render dashboard → Your Service
+   - Click "Manual Deploy" → "Clear build cache & deploy"
+   - This forces Render to use the Python version from `runtime.txt`
+
+3. **Verify Python Version in Logs:**
+   - After deployment, check Render logs
+   - Look for: "Using Python version 3.11.9" (not 3.13.4)
+   - If wrong version appears, verify `runtime.txt` is in `backend/` directory
+
+4. **Alternative: Set Environment Variable:**
+   - In Render → Environment Variables
+   - Add: `PYTHON_VERSION=3.11.9`
+   - This overrides any other Python version settings
+
 #### Problem: MongoDB connection fails
 
 **Symptoms:**
 - Logs show: `MongoDB connection failed`
 - Health endpoint returns 500 error
+- SSL/TLS handshake errors
 
 **Solutions:**
-1. Verify `MONGO_URL` in Render environment variables:
+1. **Verify Python Version:**
+   - Check Render logs for Python version (should be 3.11.9)
+   - Verify `backend/runtime.txt` contains `python-3.11.9`
+   - Python 3.13.4 has known SSL/TLS compatibility issues with MongoDB Atlas
+   - If using wrong version, update `runtime.txt` and clear build cache
+
+2. **Verify MongoDB Connection String:**
+   - Environment variable must be `MONGO_URL` (not `MONGODB_URI`)
    - Should start with `mongodb+srv://`
+   - Format: `mongodb+srv://<username>:<password>@cluster.mongodb.net/<database>?retryWrites=true&w=majority`
    - Check for typos
-   - Ensure MongoDB Atlas allows connections from Render IPs (whitelist `0.0.0.0/0` temporarily)
-2. Verify `DB_NAME` matches your MongoDB database name
-3. Check MongoDB Atlas dashboard → Network Access → Ensure Render IPs are allowed
+   - Password should be URL-encoded if it contains special characters
+
+3. **Network Access:**
+   - Ensure MongoDB Atlas allows connections from Render IPs
+   - Go to MongoDB Atlas → Network Access
+   - Add `0.0.0.0/0` (allow from anywhere) for testing, or whitelist Render IPs
+   - Verify `DB_NAME` matches your MongoDB database name
+
+4. **Clear Build Cache:**
+   - In Render dashboard → Your Service → Manual Deploy
+   - Select "Clear build cache & deploy"
+   - This ensures the correct Python version is used
 
 #### Problem: API keys not working
 
@@ -545,25 +612,37 @@ Run through this checklist to ensure everything works:
    - ✅ `uvicorn server:app --host 0.0.0.0 --port $PORT`
    - This typo causes: `bash: vicorn: command not found`
 
-2. **Trailing slashes in URLs**
+2. **Wrong Python version causing MongoDB SSL/TLS issues**
+   - ❌ Using Python 3.13.4 (has SSL/TLS compatibility issues)
+   - ✅ Using Python 3.11.9 (specified in `backend/runtime.txt`)
+   - **Fix:** Ensure `backend/runtime.txt` contains `python-3.11.9`
+   - **Fix:** Clear build cache in Render after updating `runtime.txt`
+
+3. **Wrong MongoDB environment variable name**
+   - ❌ `MONGODB_URI` (incorrect)
+   - ✅ `MONGO_URL` (correct - as used in code)
+   - Must match exactly what the code expects
+
+4. **Trailing slashes in URLs**
    - ❌ `https://backend.onrender.com/`
    - ✅ `https://backend.onrender.com`
 
-3. **Wrong environment variable names**
+5. **Wrong environment variable names**
    - Must match exactly (case-sensitive)
-   - Check spelling: `MONGO_URL` not `MONGO_URI`
+   - Check spelling: `MONGO_URL` not `MONGO_URI` or `MONGODB_URI`
 
-4. **Missing environment variables**
+6. **Missing environment variables**
    - All required variables must be set
    - Check Render/Vercel dashboards to verify all are present
 
-5. **Wrong root directory**
+7. **Wrong root directory**
    - Render: `backend` (not root)
    - Vercel: `frontend` (not root)
 
-6. **Build command errors**
+8. **Build command errors**
    - Ensure `requirements.txt` is in `backend/`
    - Ensure `package.json` is in `frontend/`
+   - Ensure `runtime.txt` is in `backend/` for Python version specification
 
 ---
 
