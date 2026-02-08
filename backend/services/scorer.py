@@ -134,8 +134,6 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
     product_signals = extraction.get("product_signals", {})
     business_signals = extraction.get("business_model_signals", {})
     customer_signals = extraction.get("customer_validation_signals", {})
-    traction_signals = extraction.get("traction_signals", {})
-    team_signals = extraction.get("team_hiring_signals", {})
     trust_signals = extraction.get("trust_compliance_signals", {})
     
     # Initialize scores
@@ -162,7 +160,7 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
         red_flags.append("No key features listed")
     
     api_available = product_signals.get("api_available", "not_mentioned")
-    if api_available == "true" or api_available == True:
+    if api_available in ("true", True):
         product_score += 0.5
         green_flags.append("API available")
     
@@ -194,7 +192,7 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
             if count > 0:
                 customer_score += 1
                 green_flags.append(f"{count} customer logos displayed")
-        except:
+        except (ValueError, TypeError):
             pass
     else:
         red_flags.append("No customer logos")
@@ -206,7 +204,7 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
             if count > 0:
                 customer_score += 0.5
                 green_flags.append(f"{count} case studies")
-        except:
+        except (ValueError, TypeError):
             pass
     
     named_customers = customer_signals.get("named_customers", [])
@@ -216,7 +214,7 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
     
     # 4. TECHNICAL CREDIBILITY (0-2 points)
     api_available = product_signals.get("api_available", "not_mentioned")
-    if api_available == "true" or api_available == True:
+    if api_available in ("true", True):
         technical_score += 1
         # Already added to green flags above
     
