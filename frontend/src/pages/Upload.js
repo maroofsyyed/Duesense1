@@ -120,6 +120,26 @@ export default function Upload() {
             )}
           </div>
 
+          {/* Website URL Input */}
+          {file && (
+            <div className="mt-6 animate-fade-in">
+              <label className="block text-sm font-medium text-text-primary mb-2">
+                Company Website <span className="text-text-muted">(optional)</span>
+              </label>
+              <input
+                type="url"
+                value={companyWebsite}
+                onChange={(e) => setCompanyWebsite(e.target.value)}
+                placeholder="https://company.com"
+                data-testid="website-input"
+                className="w-full px-4 py-2 bg-bg border border-border rounded-sm text-text-primary placeholder-text-muted focus:outline-none focus:border-primary transition-colors"
+              />
+              <p className="text-xs text-text-muted mt-1.5">
+                Optional: Provide company website for enhanced due diligence analysis
+              </p>
+            </div>
+          )}
+
           {/* Upload Button */}
           {file && (
             <button
