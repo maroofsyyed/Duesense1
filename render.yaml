@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: duesense-backend
+    runtime: python
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt --break-system-packages
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    rootDir: backend
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: MONGODB_URI
+        sync: false
+
