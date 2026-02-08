@@ -329,11 +329,12 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
         traction_result.get("confidence", "MEDIUM"),
         model_result.get("confidence", "MEDIUM"),
         website_result.get("confidence", "MEDIUM"),
+        website_dd_result.get("confidence", "MEDIUM"),
     ]
     high_count = confidences.count("HIGH")
-    confidence = "HIGH" if high_count >= 3 else "LOW" if high_count == 0 else "MEDIUM"
+    confidence = "HIGH" if high_count >= 4 else "LOW" if high_count == 0 else "MEDIUM"
 
-    thesis = await _generate_thesis(extracted, total, tier, founder_result, market_result, moat_result, traction_result, model_result, website_result)
+    thesis = await _generate_thesis(extracted, total, tier, founder_result, market_result, moat_result, traction_result, model_result, website_result, website_dd_result)
 
     score_data = {
         "company_id": company_id,
@@ -347,6 +348,7 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
         "traction_score": round(traction_score, 1),
         "model_score": round(model_score_val, 1),
         "website_score": round(website_score, 1),
+        "website_dd_score": round(float(website_dd_result.get("total_website_dd_score", 0)), 1),
         "scoring_weights": SCORING_WEIGHTS,
         "agent_details": {
             "founder": founder_result,
@@ -355,6 +357,7 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
             "traction": traction_result,
             "business_model": model_result,
             "website_intelligence": website_result,
+            "website_due_diligence": website_dd_result,
         },
         "recommendation": thesis.get("recommendation", ""),
         "investment_thesis": thesis.get("investment_thesis", ""),
