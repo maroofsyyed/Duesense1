@@ -73,6 +73,9 @@ class LLMProvider:
                     "stream": False,
                     "options": {"temperature": 0.1, "num_predict": 4000},
                 },
+            )
+            response.raise_for_status()
+            return response.json()["response"]
 
     async def _call_groq(self, prompt: str, system_message: str, model: str = "llama3-70b-8192") -> str:
         """Call Groq API for fast structured extraction"""
@@ -100,10 +103,6 @@ class LLMProvider:
             )
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
-
-            )
-            response.raise_for_status()
-            return response.json()["response"]
 
 
 # Singleton instance
