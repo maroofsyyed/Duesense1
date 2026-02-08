@@ -16,6 +16,7 @@ const STAGES = [
 export default function Upload() {
   const navigate = useNavigate();
   const [file, setFile] = useState(null);
+  const [companyWebsite, setCompanyWebsite] = useState('');
   const [uploading, setUploading] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [currentStatus, setCurrentStatus] = useState(null);
