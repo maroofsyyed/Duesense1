@@ -17,6 +17,18 @@ async def generate_memo(company_id: str, extracted: dict, enrichment: dict, scor
     """Generate a comprehensive investment memo."""
 
     company_name = extracted.get("company", {}).get("name", "Unknown")
+    
+    # Fetch Website DD data
+    website_dd_data = None
+    website_dd_score = score.get("website_dd_score", 0)
+    website_dd_details = score.get("agent_details", {}).get("website_due_diligence", {})
+    
+    # Try to get the raw website DD data from enrichment
+    website_dd_enrichment = enrichment_col.find_one(
+        {"company_id": company_id, "source_type": "website_due_diligence"}
+    )
+    if website_dd_enrichment:
+        website_dd_data = website_dd_enrichment.get("data", {})
 
     prompt = f"""You are a senior VC analyst writing a comprehensive investment memo for {company_name}.
 
@@ -29,13 +41,18 @@ EXTRACTED DECK DATA:
 ENRICHMENT DATA:
 {json.dumps(enrichment, default=str)[:3000]}
 
+WEBSITE DUE DILIGENCE DATA:
+{json.dumps(website_dd_data, default=str)[:2000] if website_dd_data else "Not available"}
+
 INVESTMENT SCORE:
 Total: {score.get('total_score')}/100 - {score.get('tier')}
-Founders: {score.get('founder_score')}/30
+Founders: {score.get('founder_score')}/25
 Market: {score.get('market_score')}/20
 Moat: {score.get('moat_score')}/20
-Traction: {score.get('traction_score')}/20
+Traction: {score.get('traction_score')}/15
 Business Model: {score.get('model_score')}/10
+Website Intelligence: {score.get('website_score')}/10
+Website Due Diligence: {website_dd_score}/10
 Recommendation: {score.get('recommendation')}
 Thesis: {score.get('investment_thesis', '')[:500]}
 Top Reasons: {json.dumps(score.get('top_reasons', []))}
@@ -77,6 +94,10 @@ Write the memo in this structure (respond with JSON):
     {{
       "title": "Business Model & Scalability",
       "content": "Revenue model, pricing, path to scale"
+    }},
+    {{
+      "title": "Website Due Diligence",
+      "content": "Website DD Score: {website_dd_score}/10. Analyze product clarity, pricing transparency, customer validation, technical credibility, and trust signals found on the website. For each signal category, explicitly state what was found or 'Not mentioned on website' if absent. Include source URLs for all claims. Red flags: {json.dumps(website_dd_details.get('red_flags', []))}. Green flags: {json.dumps(website_dd_details.get('green_flags', []))}."
     }},
     {{
       "title": "Investment Thesis",
