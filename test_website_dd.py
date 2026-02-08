@@ -101,8 +101,10 @@ if __name__ == "__main__":
     import sys
     import os
     
-    # Add backend to path
+    # Add backend to path and load environment
     sys.path.insert(0, '/app/backend')
+    from dotenv import load_dotenv
+    load_dotenv('/app/backend/.env')
     
     print("\n" + "="*60)
     print("Website Due Diligence Scoring Tests")
