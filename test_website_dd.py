@@ -39,8 +39,6 @@ def test_website_dd_scoring_with_no_pricing():
     
     result = asyncio.run(_agent_website_due_diligence(mock_dd_data))
     
-    print(f"   DEBUG - Result: {result}")
-    
     # Assertions
     assert result['breakdown']['pricing_gtm_clarity'] == 0, f"Expected pricing score = 0, got {result['breakdown']['pricing_gtm_clarity']}"
     # Check if red flags contain pricing-related issues
