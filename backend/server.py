@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 from typing import Optional
 import os
 import sys
-import ssl
 import uuid
 from datetime import datetime, timezone
 import json
@@ -32,6 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Get MongoDB URI
 MONGODB_URI = os.getenv("MONGODB_URI") or os.getenv("MONGO_URL")
 DB_NAME = os.getenv("DB_NAME")
 
@@ -43,34 +43,25 @@ if not MONGODB_URI:
 if not (MONGODB_URI.startswith("mongodb+srv://") or MONGODB_URI.startswith("mongodb://")):
     raise ValueError("Invalid MongoDB URI format - must start with mongodb:// or mongodb+srv://")
 
-logger.info(f"MongoDB URI configured: {MONGODB_URI[:30]}...")
+# CRITICAL: Parse and rebuild URI to ensure correct format
+if "?" in MONGODB_URI:
+    base_uri = MONGODB_URI.split("?", 1)[0]
+else:
+    base_uri = MONGODB_URI
 
-# Create MongoDB client with proper SSL/TLS configuration
+# Rebuild with ONLY essential parameters
+clean_uri = f"{base_uri}?retryWrites=true&w=majority"
+
+logger.info(f"Connecting to MongoDB with clean URI: {clean_uri[:40]}...")
+
+# Create client with MINIMAL configuration
 try:
     client = MongoClient(
-        MONGODB_URI,
-        # TLS/SSL settings
+        clean_uri,
         tls=True,
         tlsAllowInvalidCertificates=False,
         tlsCAFile=certifi.where(),
-
-        # Connection settings
         serverSelectionTimeoutMS=30000,
-        connectTimeoutMS=30000,
-        socketTimeoutMS=30000,
-
-        # Connection pool settings
-        maxPoolSize=10,
-        minPoolSize=1,
-        maxIdleTimeMS=45000,
-
-        # Retry settings
-        retryWrites=True,
-        retryReads=True,
-
-        # Additional write concern options (for Atlas-style deployments)
-        w='majority',
-        journal=True,
     )
 
     # Get database
@@ -81,7 +72,7 @@ try:
         db = client.get_default_database()
         logger.info("MongoDB database selected from URI default database")
 
-    logger.info("✓ MongoDB client configured successfully (connection will be tested on startup)")
+    logger.info("✓ MongoDB client created")
 
 except ConfigurationError as e:
     logger.error(f"✗ MongoDB configuration error: {e}")
