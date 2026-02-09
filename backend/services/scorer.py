@@ -1,12 +1,15 @@
-"""Investment Scoring System - compiles all agent scores including website intelligence."""
+"""
+Investment Scoring System - compiles all agent scores including website intelligence.
+
+Uses centralized database connection from db module.
+"""
 import asyncio
 from datetime import datetime, timezone
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 from bson import ObjectId
-from dotenv import load_dotenv
-import os
-import certifi
+import logging
+
+# Use centralized database module
+import db as database
 
 from services.agents import (
     agent_founder_quality,
@@ -17,31 +20,17 @@ from services.agents import (
 )
 from services.llm_provider import llm
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
-# MongoDB client with proper SSL/TLS configuration
-MONGO_URL = os.environ.get("MONGO_URL")
-DB_NAME = os.environ.get("DB_NAME")
 
-if not MONGO_URL or not DB_NAME:
-    raise ValueError("MONGO_URL and DB_NAME environment variables are required")
+def get_scores_col():
+    """Get investment scores collection (lazy)."""
+    return database.scores_collection()
 
-client = MongoClient(
-    MONGO_URL,
-    tls=True,
-    tlsAllowInvalidCertificates=False,
-    tlsCAFile=certifi.where(),
-    serverSelectionTimeoutMS=10000,
-    connectTimeoutMS=10000,
-    socketTimeoutMS=10000,
-    maxPoolSize=50,
-    minPoolSize=10,
-    retryWrites=True,
-    retryReads=True
-)
-db = client[DB_NAME]
-scores_col = db["investment_scores"]
-enrichment_col = db["enrichment_sources"]
+
+def get_enrichment_col():
+    """Get enrichment sources collection (lazy)."""
+    return database.enrichment_collection()
 
 # Updated scoring weights
 SCORING_WEIGHTS = {
@@ -306,7 +295,7 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
 
     # Fetch website DD enrichment separately from MongoDB
     website_dd_enrichment = None
-    website_dd_data = enrichment_col.find_one(
+    website_dd_data = get_enrichment_col().find_one(
         {"company_id": company_id, "source_type": "website_due_diligence"}
     )
     if website_dd_data:
@@ -387,7 +376,7 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    scores_col.update_one(
+    get_scores_col().update_one(
         {"company_id": company_id},
         {"$set": score_data},
         upsert=True,

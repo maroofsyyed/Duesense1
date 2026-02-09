@@ -6,9 +6,12 @@ services:
     rootDir: backend
     dockerfilePath: ./Dockerfile
     dockerContext: .
+    healthCheckPath: /health
     envVars:
       - key: PORT
         value: 10000
       - key: MONGODB_URI
+        sync: false
+      - key: DB_NAME
         sync: false
 

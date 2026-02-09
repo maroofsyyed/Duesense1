@@ -1,104 +1,171 @@
+"""
+DueSense Backend API Server
+
+Production-ready FastAPI server with lazy MongoDB initialization.
+The server starts successfully even if MongoDB is temporarily unavailable,
+with connection retries during the startup event.
+"""
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, ConfigurationError
+from fastapi.responses import JSONResponse
 from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
 from typing import Optional
+from contextlib import asynccontextmanager
 import os
 import sys
 import uuid
 from datetime import datetime, timezone
-import json
 import logging
-import certifi
 import asyncio
 
 load_dotenv()
 
 # Configure logging - ensure no secrets are logged
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="VC Deal Intelligence API")
+# Import the centralized database module (lazy initialization)
+import db as database
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifespan manager.
+    
+    Handles startup (MongoDB connection, indexes) and shutdown (connection cleanup).
+    The app will start even if MongoDB is temporarily unavailable, with retries.
+    """
+    logger.info("=" * 60)
+    logger.info("Starting DueSense Backend API...")
+    logger.info(f"Python version: {sys.version}")
+    logger.info("=" * 60)
+    
+    # Validate environment variables at startup (warn but don't crash)
+    _validate_environment()
+    
+    # Try to connect to MongoDB with retries
+    max_retries = 3
+    retry_delay = 5
+    db_connected = False
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"Attempting MongoDB connection (attempt {attempt}/{max_retries})...")
+            database.test_connection(max_retries=1, retry_delay=1)
+            database.create_indexes()
+            db_connected = True
+            logger.info("✓ MongoDB connection established successfully")
+            break
+        except Exception as e:
+            logger.warning(f"MongoDB connection attempt {attempt} failed: {e}")
+            if attempt < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("⚠ MongoDB connection failed after all retries")
+                logger.error("The app will start but database operations will fail until MongoDB is available")
+    
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Server ready on port {port}")
+    logger.info("=" * 60)
+    
+    yield  # App is running
+    
+    # Shutdown
+    logger.info("Shutting down DueSense Backend API...")
+    database.close_connection()
+    logger.info("✓ Shutdown complete")
+
+
+def _validate_environment():
+    """Validate required environment variables and log warnings."""
+    required_vars = ["MONGODB_URI", "MONGO_URL"]  # At least one must be set
+    optional_vars = ["DB_NAME", "EMERGENT_LLM_KEY", "GROQ_API_KEY", "MAX_FILE_SIZE_MB"]
+    
+    # Check MongoDB URL
+    mongo_url = os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URL")
+    if not mongo_url:
+        logger.warning("⚠ Neither MONGODB_URI nor MONGO_URL is set. Database operations will fail.")
+    else:
+        # Mask the URL for logging
+        safe_url = mongo_url[:30] + "..." if len(mongo_url) > 30 else mongo_url
+        logger.info(f"MongoDB URL configured: {safe_url}")
+    
+    # Log optional vars status
+    db_name = os.environ.get("DB_NAME", "duesense")
+    logger.info(f"Database name: {db_name}")
+    
+    max_file_size = os.environ.get("MAX_FILE_SIZE_MB", "25")
+    logger.info(f"Max file size: {max_file_size}MB")
+    
+    # Check LLM providers
+    if os.environ.get("EMERGENT_LLM_KEY"):
+        logger.info("✓ EMERGENT_LLM_KEY configured")
+    elif os.environ.get("GROQ_API_KEY"):
+        logger.info("✓ GROQ_API_KEY configured")
+    else:
+        logger.warning("⚠ No LLM API key configured (EMERGENT_LLM_KEY or GROQ_API_KEY)")
+
+
+# Create FastAPI app with lifespan manager
+app = FastAPI(
+    title="DueSense - VC Deal Intelligence API",
+    description="AI-powered startup analysis and investment memo generation",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS middleware - for production, specify allowed origins
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Get MongoDB URI
-MONGODB_URI = os.getenv("MONGODB_URI") or os.getenv("MONGO_URL")
-DB_NAME = os.getenv("DB_NAME")
 
-# MongoDB configuration validation
-if not MONGODB_URI:
-    logger.error("MONGODB_URI (or legacy MONGO_URL) environment variable not set!")
-    raise ValueError("MONGODB_URI environment variable is required")
+# Helper functions for collection access (lazy)
+def get_companies_col():
+    return database.companies_collection()
 
-if not (MONGODB_URI.startswith("mongodb+srv://") or MONGODB_URI.startswith("mongodb://")):
-    raise ValueError("Invalid MongoDB URI format - must start with mongodb:// or mongodb+srv://")
+def get_pitch_decks_col():
+    return database.pitch_decks_collection()
 
-# CRITICAL: Parse and rebuild URI to ensure correct format
-if "?" in MONGODB_URI:
-    base_uri = MONGODB_URI.split("?", 1)[0]
-else:
-    base_uri = MONGODB_URI
+def get_founders_col():
+    return database.founders_collection()
 
-# Rebuild with ONLY essential parameters
-clean_uri = f"{base_uri}?retryWrites=true&w=majority"
+def get_enrichment_col():
+    return database.enrichment_collection()
 
-logger.info(f"Connecting to MongoDB with clean URI: {clean_uri[:40]}...")
+def get_competitors_col():
+    return database.competitors_collection()
 
-# Create client with MINIMAL configuration
-try:
-    client = MongoClient(
-        clean_uri,
-        tls=True,
-        tlsAllowInvalidCertificates=False,
-        tlsCAFile=certifi.where(),
-        serverSelectionTimeoutMS=30000,
-    )
+def get_scores_col():
+    return database.scores_collection()
 
-    # Get database
-    if DB_NAME:
-        db = client[DB_NAME]
-        logger.info(f"MongoDB database selected from DB_NAME env: {DB_NAME}")
-    else:
-        db = client.get_default_database()
-        logger.info("MongoDB database selected from URI default database")
-
-    logger.info("✓ MongoDB client created")
-
-except ConfigurationError as e:
-    logger.error(f"✗ MongoDB configuration error: {e}")
-    raise
-except Exception as e:
-    logger.error(f"✗ MongoDB client creation failed: {e}")
-    raise
-
-# Collection references (indexes will be created in startup event)
-companies_col = db["companies"]
-pitch_decks_col = db["pitch_decks"]
-founders_col = db["founders"]
-enrichment_col = db["enrichment_sources"]
-competitors_col = db["competitors"]
-scores_col = db["investment_scores"]
-memos_col = db["investment_memos"]
+def get_memos_col():
+    return database.memos_collection()
 
 
 def serialize_doc(doc):
+    """Serialize MongoDB document, converting _id to id string."""
     if doc is None:
         return None
+    doc = dict(doc)  # Make a copy to avoid modifying original
     doc["id"] = str(doc.pop("_id"))
     return doc
 
 
 def serialize_docs(docs):
+    """Serialize a list of MongoDB documents."""
     return [serialize_doc(d) for d in docs]
 
 
@@ -110,94 +177,45 @@ def validate_object_id(id_str: str) -> ObjectId:
         raise HTTPException(status_code=400, detail=f"Invalid ID format: {id_str}")
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Test MongoDB connection, create indexes, and configure server on startup with retries."""
-    logger.info("Starting application...")
-
-    max_retries = 3
-    retry_delay = 5  # seconds
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            logger.info(f"Attempting MongoDB connection (attempt {attempt}/{max_retries})...")
-
-            # Test connection with admin command
-            result = client.admin.command("ping")
-            logger.info(f"✓ MongoDB connection successful! Ping result: {result}")
-
-            # Get server info
-            server_info = client.server_info()
-            logger.info(f"✓ MongoDB version: {server_info.get('version', 'unknown')}")
-
-            # Create indexes (sync operations on PyMongo collections)
-            logger.info("Creating database indexes...")
-            try:
-                companies_col.create_index("name")
-                pitch_decks_col.create_index("company_id")
-                founders_col.create_index("company_id")
-                enrichment_col.create_index("company_id")
-                scores_col.create_index("company_id")
-                logger.info("✓ Database indexes created successfully")
-            except Exception as e:
-                logger.error(f"✗ Index creation failed: {e}")
-                # Don't raise - indexes might already exist
-
-            # Connection successful - break retry loop
-            break
-
-        except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-            logger.error(f"✗ MongoDB connection failed (attempt {attempt}/{max_retries}): {e}")
-            if attempt < max_retries:
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error("✗ All connection attempts failed. Exiting.")
-                raise
-
-        except Exception as e:
-            logger.error(f"✗ Unexpected error during startup (attempt {attempt}/{max_retries}): {e}")
-            if attempt < max_retries:
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-            else:
-                raise
-
-    port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Server configured to run on port {port}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Shutdown event to close MongoDB connection."""
-    try:
-        client.close()
-        logger.info("✓ MongoDB connection closed")
-    except Exception as e:
-        logger.error(f"✗ Error closing MongoDB connection: {str(e)}")
-
-
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for Render"""
+    """
+    Health check endpoint for Render and other monitoring systems.
+    
+    Returns healthy status if the app is running and database is connected.
+    Returns unhealthy with details if database is unavailable.
+    """
     try:
         # Test MongoDB connection
+        client = database.get_client()
         client.admin.command('ping')
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "python_version": sys.version
-        }
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "healthy",
+                "database": "connected",
+                "python_version": sys.version.split()[0],
+                "service": "duesense-backend",
+            }
+        )
     except Exception as e:
-        return {
-            "status": "unhealthy",
-            "database": "disconnected",
-            "error": str(e)
-        }
+        # Return 200 but indicate unhealthy status
+        # This allows the app to stay up while DB reconnects
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "degraded",
+                "database": "disconnected",
+                "python_version": sys.version.split()[0],
+                "service": "duesense-backend",
+                "message": "Database temporarily unavailable",
+            }
+        )
 
 
 @app.get("/api/health")
-async def health():
+async def api_health():
+    """Simple health check for API consumers."""
     return {"status": "ok", "service": "vc-deal-intelligence"}
 
 
@@ -205,11 +223,11 @@ async def health():
 
 @app.get("/api/companies")
 async def list_companies():
-    companies = list(companies_col.find().sort("created_at", -1))
+    companies = list(get_companies_col().find().sort("created_at", -1))
     result = []
     for c in companies:
         c["id"] = str(c.pop("_id"))
-        score = scores_col.find_one({"company_id": c["id"]}, {"_id": 0})
+        score = get_scores_col().find_one({"company_id": c["id"]}, {"_id": 0})
         c["score"] = score
         result.append(c)
     return {"companies": result}
@@ -218,18 +236,18 @@ async def list_companies():
 @app.get("/api/companies/{company_id}")
 async def get_company(company_id: str):
     obj_id = validate_object_id(company_id)
-    company = companies_col.find_one({"_id": obj_id})
+    company = get_companies_col().find_one({"_id": obj_id})
     if not company:
         raise HTTPException(404, "Company not found")
     company = serialize_doc(company)
 
     # Get related data
-    decks = serialize_docs(list(pitch_decks_col.find({"company_id": company_id})))
-    founders_list = serialize_docs(list(founders_col.find({"company_id": company_id})))
-    enrichments = serialize_docs(list(enrichment_col.find({"company_id": company_id})))
-    score = scores_col.find_one({"company_id": company_id}, {"_id": 0})
-    comps = serialize_docs(list(competitors_col.find({"company_id": company_id})))
-    memo = memos_col.find_one({"company_id": company_id}, {"_id": 0})
+    decks = serialize_docs(list(get_pitch_decks_col().find({"company_id": company_id})))
+    founders_list = serialize_docs(list(get_founders_col().find({"company_id": company_id})))
+    enrichments = serialize_docs(list(get_enrichment_col().find({"company_id": company_id})))
+    score = get_scores_col().find_one({"company_id": company_id}, {"_id": 0})
+    comps = serialize_docs(list(get_competitors_col().find({"company_id": company_id})))
+    memo = get_memos_col().find_one({"company_id": company_id}, {"_id": 0})
 
     return {
         "company": company,
@@ -245,13 +263,13 @@ async def get_company(company_id: str):
 @app.delete("/api/companies/{company_id}")
 async def delete_company(company_id: str):
     obj_id = validate_object_id(company_id)
-    companies_col.delete_one({"_id": obj_id})
-    pitch_decks_col.delete_many({"company_id": company_id})
-    founders_col.delete_many({"company_id": company_id})
-    enrichment_col.delete_many({"company_id": company_id})
-    scores_col.delete_many({"company_id": company_id})
-    competitors_col.delete_many({"company_id": company_id})
-    memos_col.delete_many({"company_id": company_id})
+    get_companies_col().delete_one({"_id": obj_id})
+    get_pitch_decks_col().delete_many({"company_id": company_id})
+    get_founders_col().delete_many({"company_id": company_id})
+    get_enrichment_col().delete_many({"company_id": company_id})
+    get_scores_col().delete_many({"company_id": company_id})
+    get_competitors_col().delete_many({"company_id": company_id})
+    get_memos_col().delete_many({"company_id": company_id})
     return {"status": "deleted"}
 
 
@@ -280,7 +298,7 @@ async def upload_deck(
         raise HTTPException(400, f"File exceeds {os.environ.get('MAX_FILE_SIZE_MB', 25)}MB limit")
 
     # Create company placeholder
-    company_id = str(companies_col.insert_one({
+    company_id = str(get_companies_col().insert_one({
         "name": "Processing...",
         "status": "processing",
         "stage": None,
@@ -300,7 +318,7 @@ async def upload_deck(
         f.write(content)
 
     # Create deck record
-    deck_id = str(pitch_decks_col.insert_one({
+    deck_id = str(get_pitch_decks_col().insert_one({
         "company_id": company_id,
         "file_path": file_path,
         "file_name": file.filename,
@@ -332,11 +350,11 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
     
     try:
         # Step 1: Extract deck + optional website DD in parallel
-        pitch_decks_col.update_one(
+        get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "extracting"}}
         )
-        companies_col.update_one(
+        get_companies_col().update_one(
             {"_id": company_obj_id},
             {"$set": {"status": "extracting"}}
         )
@@ -361,7 +379,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             if isinstance(results[1], Exception):
                 # Persist website DD failure in enrichment_sources
                 try:
-                    enrichment_col.insert_one({
+                    get_enrichment_col().insert_one({
                         "company_id": company_id,
                         "source_type": "website_due_diligence",
                         "source_url": company_website,
@@ -378,7 +396,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
                     logger.error(f"Failed to persist website DD error: {persist_err}")
             website_dd_result = results[1] if not isinstance(results[1], Exception) else {"error": str(results[1])}
 
-        pitch_decks_col.update_one(
+        get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"extracted_data": extracted, "processing_status": "extracted"}}
         )
@@ -387,7 +405,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         # User-provided website takes priority over deck-extracted website
         company_data = extracted.get("company", {})
         final_website = company_website or company_data.get("website")
-        companies_col.update_one(
+        get_companies_col().update_one(
             {"_id": company_obj_id},
             {"$set": {
                 "name": company_data.get("name", "Unknown Company"),
@@ -407,7 +425,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
 
         # Save founders
         for f in extracted.get("founders", []):
-            founders_col.insert_one({
+            get_founders_col().insert_one({
                 "company_id": company_id,
                 "name": f.get("name", "Unknown"),
                 "role": f.get("role"),
@@ -419,7 +437,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             })
 
         # Step 2: Enrich (website_intelligence in enrichment engine will use the website)
-        pitch_decks_col.update_one(
+        get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "enriching"}}
         )
@@ -432,13 +450,13 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             logger.error(f"Enrichment failed for company {company_id}: {type(enrich_err).__name__}")
             enrichment_data = {"error": "Enrichment failed"}
 
-        companies_col.update_one(
+        get_companies_col().update_one(
             {"_id": company_obj_id},
             {"$set": {"status": "scoring"}}
         )
 
         # Step 3: Score
-        pitch_decks_col.update_one(
+        get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "scoring"}}
         )
@@ -451,13 +469,13 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             logger.error(f"Scoring failed for company {company_id}: {type(score_err).__name__}")
             score_data = {"error": "Scoring failed"}
 
-        companies_col.update_one(
+        get_companies_col().update_one(
             {"_id": company_obj_id},
             {"$set": {"status": "generating_memo"}}
         )
 
         # Step 4: Generate Memo
-        pitch_decks_col.update_one(
+        get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "generating_memo"}}
         )
@@ -469,11 +487,11 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             logger.error(f"Memo generation failed for company {company_id}: {type(memo_err).__name__}")
 
         # Final status
-        pitch_decks_col.update_one(
+        get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "completed"}}
         )
-        companies_col.update_one(
+        get_companies_col().update_one(
             {"_id": company_obj_id},
             {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}}
         )
@@ -482,11 +500,11 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         # Sanitize error logging - no secrets exposed
         error_msg = str(e)
         logger.error(f"Pipeline failed for deck {deck_id}, company {company_id}: {error_msg}")
-        pitch_decks_col.update_one(
+        get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "failed", "error_message": error_msg}}
         )
-        companies_col.update_one(
+        get_companies_col().update_one(
             {"_id": company_obj_id},
             {"$set": {"status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()}}
         )
@@ -504,7 +522,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
 @app.get("/api/decks/{deck_id}/status")
 async def get_deck_status(deck_id: str):
     obj_id = validate_object_id(deck_id)
-    deck = pitch_decks_col.find_one({"_id": obj_id}, {"_id": 0})
+    deck = get_pitch_decks_col().find_one({"_id": obj_id}, {"_id": 0})
     if not deck:
         raise HTTPException(404, "Deck not found")
     return deck
@@ -515,11 +533,11 @@ async def get_deck_status(deck_id: str):
 @app.post("/api/companies/{company_id}/enrich")
 async def trigger_enrichment(company_id: str, background_tasks: BackgroundTasks):
     obj_id = validate_object_id(company_id)
-    company = companies_col.find_one({"_id": obj_id})
+    company = get_companies_col().find_one({"_id": obj_id})
     if not company:
         raise HTTPException(404, "Company not found")
 
-    deck = pitch_decks_col.find_one({"company_id": company_id})
+    deck = get_pitch_decks_col().find_one({"company_id": company_id})
     extracted = deck.get("extracted_data", {}) if deck else {}
 
     background_tasks.add_task(run_enrichment, company_id, extracted)
@@ -538,7 +556,7 @@ async def run_enrichment(company_id, extracted):
 
 @app.get("/api/companies/{company_id}/website-intelligence")
 async def get_website_intelligence(company_id: str):
-    wi = enrichment_col.find_one(
+    wi = get_enrichment_col().find_one(
         {"company_id": company_id, "source_type": "website_intelligence"},
         {"_id": 0}
     )
@@ -550,7 +568,7 @@ async def get_website_intelligence(company_id: str):
 @app.post("/api/companies/{company_id}/website-intelligence/rerun")
 async def rerun_website_intelligence(company_id: str, background_tasks: BackgroundTasks):
     obj_id = validate_object_id(company_id)
-    company = companies_col.find_one({"_id": obj_id})
+    company = get_companies_col().find_one({"_id": obj_id})
     if not company:
         raise HTTPException(404, "Company not found")
     website = company.get("website")
@@ -572,7 +590,7 @@ async def _run_website_intel(company_id, website):
 
 @app.get("/api/companies/{company_id}/score")
 async def get_score(company_id: str):
-    score = scores_col.find_one({"company_id": company_id}, {"_id": 0})
+    score = get_scores_col().find_one({"company_id": company_id}, {"_id": 0})
     if not score:
         raise HTTPException(404, "Score not found")
     return score
@@ -582,7 +600,7 @@ async def get_score(company_id: str):
 
 @app.get("/api/companies/{company_id}/memo")
 async def get_memo(company_id: str):
-    memo = memos_col.find_one({"company_id": company_id}, {"_id": 0})
+    memo = get_memos_col().find_one({"company_id": company_id}, {"_id": 0})
     if not memo:
         raise HTTPException(404, "Memo not found")
     return memo
@@ -592,23 +610,23 @@ async def get_memo(company_id: str):
 
 @app.get("/api/dashboard/stats")
 async def dashboard_stats():
-    total = companies_col.count_documents({})
-    processing = companies_col.count_documents({"status": {"$in": ["processing", "extracting", "enriching", "scoring", "generating_memo"]}})
-    completed = companies_col.count_documents({"status": "completed"})
-    failed = companies_col.count_documents({"status": "failed"})
+    total = get_companies_col().count_documents({})
+    processing = get_companies_col().count_documents({"status": {"$in": ["processing", "extracting", "enriching", "scoring", "generating_memo"]}})
+    completed = get_companies_col().count_documents({"status": "completed"})
+    failed = get_companies_col().count_documents({"status": "failed"})
 
     # Get tier distribution
-    tier_1 = scores_col.count_documents({"tier": "TIER_1"})
-    tier_2 = scores_col.count_documents({"tier": "TIER_2"})
-    tier_3 = scores_col.count_documents({"tier": "TIER_3"})
-    tier_pass = scores_col.count_documents({"tier": "PASS"})
+    tier_1 = get_scores_col().count_documents({"tier": "TIER_1"})
+    tier_2 = get_scores_col().count_documents({"tier": "TIER_2"})
+    tier_3 = get_scores_col().count_documents({"tier": "TIER_3"})
+    tier_pass = get_scores_col().count_documents({"tier": "PASS"})
 
     # Recent companies
-    recent = list(companies_col.find({"status": "completed"}).sort("created_at", -1).limit(5))
+    recent = list(get_companies_col().find({"status": "completed"}).sort("created_at", -1).limit(5))
     recent_list = []
     for r in recent:
         r["id"] = str(r.pop("_id"))
-        score = scores_col.find_one({"company_id": r["id"]}, {"_id": 0})
+        score = get_scores_col().find_one({"company_id": r["id"]}, {"_id": 0})
         r["score"] = score
         recent_list.append(r)
 
