@@ -1,13 +1,17 @@
 """
 DueSense Backend API Server
 
-Production-ready FastAPI server with lazy MongoDB initialization.
-The server starts successfully even if MongoDB is temporarily unavailable,
-with connection retries during the startup event.
+Production-ready FastAPI server with:
+- Lazy MongoDB initialization
+- Versioned API (v1)
+- API Key authentication
+- Production landing page
+- Comprehensive error handling
 """
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
@@ -19,18 +23,28 @@ import uuid
 from datetime import datetime, timezone
 import logging
 import asyncio
+from pathlib import Path
 
 load_dotenv()
 
-# Configure logging - ensure no secrets are logged
+# Configure logging - production-appropriate level
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+# Reduce noise from third-party libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("pymongo").setLevel(logging.WARNING)
+
 # Import the centralized database module (lazy initialization)
 import db as database
+
+# Import API v1 router
+from api.v1.router import router as api_v1_router
 
 
 @asynccontextmanager
@@ -116,20 +130,71 @@ def _validate_environment():
 # Create FastAPI app with lifespan manager
 app = FastAPI(
     title="DueSense - VC Deal Intelligence API",
-    description="AI-powered startup analysis and investment memo generation",
+    description="""
+## AI-Powered VC Deal Intelligence
+
+DueSense transforms pitch decks into actionable investment insights.
+
+### Features
+- **Deck Extraction**: Upload PDF/PPTX pitch decks
+- **AI Analysis**: Automatic scoring across 6 dimensions
+- **Deep Enrichment**: Website, GitHub, news, competitor data
+- **Investment Memos**: AI-generated comprehensive reports
+
+### Authentication
+Protected endpoints require an API key in the `X-API-Key` header.
+See `/api/v1/auth/info` for details.
+
+### Versioning
+All API endpoints are versioned under `/api/v1/`.
+    """,
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_tags=[
+        {"name": "Authentication", "description": "API key management"},
+        {"name": "Deals", "description": "VC deal management"},
+        {"name": "Ingestion", "description": "Pitch deck upload and processing"},
+        {"name": "Analytics", "description": "Dashboard and statistics"},
+        {"name": "Health", "description": "System health checks"},
+    ]
 )
 
-# CORS middleware - for production, specify allowed origins
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+# CORS middleware - production configuration
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
+if ALLOWED_ORIGINS == "*":
+    origins = ["*"]
+else:
+    origins = [o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
+
+
+# Global exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Handle uncaught exceptions gracefully."""
+    logger.error(f"Unhandled exception: {type(exc).__name__}: {str(exc)[:200]}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "message": "An unexpected error occurred. Please try again later.",
+            "type": type(exc).__name__
+        }
+    )
+
+
+# Include API v1 router
+app.include_router(api_v1_router)
 
 
 # Helper functions for collection access (lazy)
@@ -180,142 +245,43 @@ def validate_object_id(id_str: str) -> ObjectId:
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """
-    Root endpoint - Welcome page for DueSense Backend.
+    Production landing page for DueSense.
     
-    Returns a visible HTML page confirming the backend is live.
+    Serves the full marketing/product landing page with:
+    - Product description
+    - Features overview
+    - Live statistics from the database
+    - API documentation links
     """
-    # Check database status for display
-    db_status = "🔴 Disconnected"
-    db_connected = False
+    # Read the landing page template
+    template_path = Path(__file__).parent / "templates" / "landing.html"
+    
     try:
-        client = database.get_client()
-        client.admin.command('ping')
-        db_status = "🟢 Connected"
-        db_connected = True
-    except Exception:
-        pass
-    
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>DueSense API</title>
-        <style>
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: #e6e6e6;
-            }}
-            .container {{
-                text-align: center;
-                padding: 40px;
-                background: rgba(255,255,255,0.05);
-                border-radius: 20px;
-                backdrop-filter: blur(10px);
-                border: 1px solid rgba(255,255,255,0.1);
-                max-width: 500px;
-                margin: 20px;
-            }}
-            .logo {{
-                font-size: 3rem;
-                margin-bottom: 10px;
-            }}
-            h1 {{
-                font-size: 2.5rem;
-                margin-bottom: 10px;
-                background: linear-gradient(90deg, #00d4ff, #7b2cbf);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-                background-clip: text;
-            }}
-            .tagline {{
-                color: #a0a0a0;
-                margin-bottom: 30px;
-                font-size: 1.1rem;
-            }}
-            .status {{
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-                margin-bottom: 30px;
-            }}
-            .status-item {{
-                display: flex;
-                justify-content: space-between;
-                padding: 12px 20px;
-                background: rgba(255,255,255,0.03);
-                border-radius: 10px;
-                border: 1px solid rgba(255,255,255,0.05);
-            }}
-            .status-label {{ color: #888; }}
-            .status-value {{ font-weight: 600; }}
-            .status-ok {{ color: #00d4ff; }}
-            .status-db {{ color: {'#00ff88' if db_connected else '#ff6b6b'}; }}
-            .links {{
-                display: flex;
-                gap: 15px;
-                justify-content: center;
-                flex-wrap: wrap;
-            }}
-            a {{
-                color: #00d4ff;
-                text-decoration: none;
-                padding: 10px 20px;
-                border: 1px solid #00d4ff;
-                border-radius: 8px;
-                transition: all 0.3s;
-            }}
-            a:hover {{
-                background: #00d4ff;
-                color: #1a1a2e;
-            }}
-            .version {{
-                margin-top: 30px;
-                font-size: 0.85rem;
-                color: #666;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="logo">🚀</div>
-            <h1>DueSense</h1>
-            <p class="tagline">VC Deal Intelligence API</p>
-            
-            <div class="status">
-                <div class="status-item">
-                    <span class="status-label">API Status</span>
-                    <span class="status-value status-ok">✓ Online</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">Database</span>
-                    <span class="status-value status-db">{db_status}</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">Python</span>
-                    <span class="status-value">{sys.version.split()[0]}</span>
-                </div>
-            </div>
-            
-            <div class="links">
-                <a href="/docs">📚 API Docs</a>
-                <a href="/health">💚 Health Check</a>
-                <a href="/api/health">🔗 API Status</a>
-            </div>
-            
-            <p class="version">v1.0.0 • Powered by FastAPI</p>
-        </div>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content, status_code=200)
+        with open(template_path, "r") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content, status_code=200)
+    except FileNotFoundError:
+        # Fallback to simple page if template is missing
+        return HTMLResponse(
+            content="""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>DueSense API</title>
+                <style>
+                    body { font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: #f8fafc; }
+                    a { color: #6366f1; }
+                </style>
+            </head>
+            <body>
+                <h1>🚀 DueSense</h1>
+                <p>AI-Powered VC Deal Intelligence</p>
+                <p><a href="/docs">View API Documentation</a></p>
+            </body>
+            </html>
+            """,
+            status_code=200
+        )
 
 
 @app.get("/health")
