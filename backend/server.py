@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, ConfigurationError
 from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import certifi
+import asyncio
 
 load_dotenv()
 
@@ -31,42 +32,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MONGO_URL = os.environ.get("MONGO_URL")
-DB_NAME = os.environ.get("DB_NAME")
+MONGODB_URI = os.getenv("MONGODB_URI") or os.getenv("MONGO_URL")
+DB_NAME = os.getenv("DB_NAME")
 
-# Validate required environment variables
-if not MONGO_URL or not DB_NAME:
-    raise ValueError("MONGO_URL and DB_NAME environment variables are required")
+# MongoDB configuration validation
+if not MONGODB_URI:
+    logger.error("MONGODB_URI (or legacy MONGO_URL) environment variable not set!")
+    raise ValueError("MONGODB_URI environment variable is required")
 
-if not MONGO_URL.startswith("mongodb+srv://") and not MONGO_URL.startswith("mongodb://"):
+if not (MONGODB_URI.startswith("mongodb+srv://") or MONGODB_URI.startswith("mongodb://")):
     raise ValueError("Invalid MongoDB URI format - must start with mongodb:// or mongodb+srv://")
 
-# CRITICAL: Create explicit SSL context with certifi
-ssl_context = ssl.create_default_context(cafile=certifi.where())
-ssl_context.check_hostname = True
-ssl_context.verify_mode = ssl.CERT_REQUIRED
+logger.info(f"MongoDB URI configured: {MONGODB_URI[:30]}...")
 
 # Create MongoDB client with proper SSL/TLS configuration
 try:
     client = MongoClient(
-        MONGO_URL,
+        MONGODB_URI,
+        # TLS/SSL settings
         tls=True,
         tlsAllowInvalidCertificates=False,
         tlsCAFile=certifi.where(),
-        serverSelectionTimeoutMS=30000,  # Increased timeout for SSL handshake
+
+        # Connection settings
+        serverSelectionTimeoutMS=30000,
         connectTimeoutMS=30000,
         socketTimeoutMS=30000,
-        maxPoolSize=50,
-        minPoolSize=10,
-        retryWrites=True,
-        retryReads=True
-    )
-    logger.info("✓ MongoDB client configured (connection will be tested on startup)")
-except Exception as e:
-    logger.error(f"✗ MongoDB client configuration failed: {str(e)}")
-    raise
 
-db = client[DB_NAME]
+        # Connection pool settings
+        maxPoolSize=10,
+        minPoolSize=1,
+        maxIdleTimeMS=45000,
+
+        # Retry settings
+        retryWrites=True,
+        retryReads=True,
+
+        # Additional write concern options (for Atlas-style deployments)
+        w='majority',
+        journal=True,
+    )
+
+    # Get database
+    if DB_NAME:
+        db = client[DB_NAME]
+        logger.info(f"MongoDB database selected from DB_NAME env: {DB_NAME}")
+    else:
+        db = client.get_default_database()
+        logger.info("MongoDB database selected from URI default database")
+
+    logger.info("✓ MongoDB client configured successfully (connection will be tested on startup)")
+
+except ConfigurationError as e:
+    logger.error(f"✗ MongoDB configuration error: {e}")
+    raise
+except Exception as e:
+    logger.error(f"✗ MongoDB client creation failed: {e}")
+    raise
 
 # Collection references (indexes will be created in startup event)
 companies_col = db["companies"]
@@ -99,30 +121,57 @@ def validate_object_id(id_str: str) -> ObjectId:
 
 @app.on_event("startup")
 async def startup_event():
-    """Startup event to verify MongoDB connection, create indexes, and configure server."""
-    # Verify MongoDB connection
-    try:
-        client.admin.command('ping')
-        logger.info("✓ Successfully connected to MongoDB")
-    except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-        logger.error(f"✗ MongoDB connection failed during startup: {str(e)}")
-        raise
-    except Exception as e:
-        logger.error(f"✗ MongoDB connection error during startup: {str(e)}")
-        raise
-    
-    # Create indexes (moved from module level to avoid SSL issues during import)
-    try:
-        companies_col.create_index("name")
-        pitch_decks_col.create_index("company_id")
-        founders_col.create_index("company_id")
-        enrichment_col.create_index("company_id")
-        scores_col.create_index("company_id")
-        logger.info("✓ Database indexes created")
-    except Exception as e:
-        logger.error(f"✗ Index creation failed: {str(e)}")
-        # Don't raise - indexes might already exist
-    
+    """Test MongoDB connection, create indexes, and configure server on startup with retries."""
+    logger.info("Starting application...")
+
+    max_retries = 3
+    retry_delay = 5  # seconds
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"Attempting MongoDB connection (attempt {attempt}/{max_retries})...")
+
+            # Test connection with admin command
+            result = client.admin.command("ping")
+            logger.info(f"✓ MongoDB connection successful! Ping result: {result}")
+
+            # Get server info
+            server_info = client.server_info()
+            logger.info(f"✓ MongoDB version: {server_info.get('version', 'unknown')}")
+
+            # Create indexes (sync operations on PyMongo collections)
+            logger.info("Creating database indexes...")
+            try:
+                companies_col.create_index("name")
+                pitch_decks_col.create_index("company_id")
+                founders_col.create_index("company_id")
+                enrichment_col.create_index("company_id")
+                scores_col.create_index("company_id")
+                logger.info("✓ Database indexes created successfully")
+            except Exception as e:
+                logger.error(f"✗ Index creation failed: {e}")
+                # Don't raise - indexes might already exist
+
+            # Connection successful - break retry loop
+            break
+
+        except (ConnectionFailure, ServerSelectionTimeoutError) as e:
+            logger.error(f"✗ MongoDB connection failed (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("✗ All connection attempts failed. Exiting.")
+                raise
+
+        except Exception as e:
+            logger.error(f"✗ Unexpected error during startup (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                raise
+
     port = int(os.environ.get("PORT", 8000))
     logger.info(f"Server configured to run on port {port}")
 
