@@ -7,7 +7,7 @@ with connection retries during the startup event.
 """
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
@@ -177,40 +177,178 @@ def validate_object_id(id_str: str) -> ObjectId:
         raise HTTPException(status_code=400, detail=f"Invalid ID format: {id_str}")
 
 
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """
+    Root endpoint - Welcome page for DueSense Backend.
+    
+    Returns a visible HTML page confirming the backend is live.
+    """
+    # Check database status for display
+    db_status = "🔴 Disconnected"
+    db_connected = False
+    try:
+        client = database.get_client()
+        client.admin.command('ping')
+        db_status = "🟢 Connected"
+        db_connected = True
+    except Exception:
+        pass
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>DueSense API</title>
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #e6e6e6;
+            }}
+            .container {{
+                text-align: center;
+                padding: 40px;
+                background: rgba(255,255,255,0.05);
+                border-radius: 20px;
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255,255,255,0.1);
+                max-width: 500px;
+                margin: 20px;
+            }}
+            .logo {{
+                font-size: 3rem;
+                margin-bottom: 10px;
+            }}
+            h1 {{
+                font-size: 2.5rem;
+                margin-bottom: 10px;
+                background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }}
+            .tagline {{
+                color: #a0a0a0;
+                margin-bottom: 30px;
+                font-size: 1.1rem;
+            }}
+            .status {{
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+                margin-bottom: 30px;
+            }}
+            .status-item {{
+                display: flex;
+                justify-content: space-between;
+                padding: 12px 20px;
+                background: rgba(255,255,255,0.03);
+                border-radius: 10px;
+                border: 1px solid rgba(255,255,255,0.05);
+            }}
+            .status-label {{ color: #888; }}
+            .status-value {{ font-weight: 600; }}
+            .status-ok {{ color: #00d4ff; }}
+            .status-db {{ color: {'#00ff88' if db_connected else '#ff6b6b'}; }}
+            .links {{
+                display: flex;
+                gap: 15px;
+                justify-content: center;
+                flex-wrap: wrap;
+            }}
+            a {{
+                color: #00d4ff;
+                text-decoration: none;
+                padding: 10px 20px;
+                border: 1px solid #00d4ff;
+                border-radius: 8px;
+                transition: all 0.3s;
+            }}
+            a:hover {{
+                background: #00d4ff;
+                color: #1a1a2e;
+            }}
+            .version {{
+                margin-top: 30px;
+                font-size: 0.85rem;
+                color: #666;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">🚀</div>
+            <h1>DueSense</h1>
+            <p class="tagline">VC Deal Intelligence API</p>
+            
+            <div class="status">
+                <div class="status-item">
+                    <span class="status-label">API Status</span>
+                    <span class="status-value status-ok">✓ Online</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Database</span>
+                    <span class="status-value status-db">{db_status}</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Python</span>
+                    <span class="status-value">{sys.version.split()[0]}</span>
+                </div>
+            </div>
+            
+            <div class="links">
+                <a href="/docs">📚 API Docs</a>
+                <a href="/health">💚 Health Check</a>
+                <a href="/api/health">🔗 API Status</a>
+            </div>
+            
+            <p class="version">v1.0.0 • Powered by FastAPI</p>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content, status_code=200)
+
+
 @app.get("/health")
 async def health_check():
     """
     Health check endpoint for Render and other monitoring systems.
-    
-    Returns healthy status if the app is running and database is connected.
-    Returns unhealthy with details if database is unavailable.
+
+    ALWAYS returns 200 OK to keep the service alive.
+    Reports database connectivity status in the response body.
     """
+    db_connected = False
+    db_error = None
+    
     try:
         # Test MongoDB connection
         client = database.get_client()
         client.admin.command('ping')
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "healthy",
-                "database": "connected",
-                "python_version": sys.version.split()[0],
-                "service": "duesense-backend",
-            }
-        )
+        db_connected = True
     except Exception as e:
-        # Return 200 but indicate unhealthy status
-        # This allows the app to stay up while DB reconnects
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "degraded",
-                "database": "disconnected",
-                "python_version": sys.version.split()[0],
-                "service": "duesense-backend",
-                "message": "Database temporarily unavailable",
-            }
-        )
+        db_error = str(e)[:100]  # Truncate error message
+    
+    # Always return 200 OK - Render health checks expect this
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "ok",
+            "service": "duesense-backend",
+            "db_connected": db_connected,
+            "python_version": sys.version.split()[0],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **({"db_error": db_error} if db_error else {}),
+        }
+    )
 
 
 @app.get("/api/health")
