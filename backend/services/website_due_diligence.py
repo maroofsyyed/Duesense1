@@ -1,39 +1,24 @@
-"""Website Due Diligence Pipeline - runs at upload time, focused on citation-heavy extraction."""
+"""
+Website Due Diligence Pipeline - runs at upload time, focused on citation-heavy extraction.
+
+Uses centralized database connection from db module.
+"""
 import asyncio
 from datetime import datetime, timezone
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
-from dotenv import load_dotenv
-import os
-import certifi
+import logging
 
-load_dotenv()
-
-# MongoDB client with proper SSL/TLS configuration
-MONGO_URL = os.environ.get("MONGO_URL")
-DB_NAME = os.environ.get("DB_NAME")
-
-if not MONGO_URL or not DB_NAME:
-    raise ValueError("MONGO_URL and DB_NAME environment variables are required")
-
-client = MongoClient(
-    MONGO_URL,
-    tls=True,
-    tlsAllowInvalidCertificates=False,
-    tlsCAFile=certifi.where(),
-    serverSelectionTimeoutMS=10000,
-    connectTimeoutMS=10000,
-    socketTimeoutMS=10000,
-    maxPoolSize=50,
-    minPoolSize=10,
-    retryWrites=True,
-    retryReads=True
-)
-db = client[DB_NAME]
-enrichment_col = db["enrichment_sources"]
+# Use centralized database module
+import db as database
 
 from integrations.clients import ScraperClient
 from services.llm_provider import llm
+
+logger = logging.getLogger(__name__)
+
+
+def get_enrichment_col():
+    """Get enrichment sources collection (lazy)."""
+    return database.enrichment_collection()
 
 CORE_PAGES = [
     "/", "/about", "/about-us", "/team", "/our-team",
@@ -86,7 +71,7 @@ async def run_website_due_diligence(company_id: str, website_url: str) -> dict:
             "reason": "Website unreachable or blocked",
             "website_url": website_url,
         }
-        enrichment_col.insert_one({
+        get_enrichment_col().insert_one({
             "company_id": company_id,
             "source_type": "website_due_diligence",
             "source_url": website_url,
@@ -110,7 +95,7 @@ async def run_website_due_diligence(company_id: str, website_url: str) -> dict:
         "crawl_timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    enrichment_col.insert_one({
+    get_enrichment_col().insert_one({
         "company_id": company_id,
         "source_type": "website_due_diligence",
         "source_url": website_url,
