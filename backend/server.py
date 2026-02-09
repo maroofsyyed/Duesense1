@@ -242,18 +242,32 @@ def validate_object_id(id_str: str) -> ObjectId:
         raise HTTPException(status_code=400, detail=f"Invalid ID format: {id_str}")
 
 
+# Check if React frontend build exists
+STATIC_DIR = Path(__file__).parent / "static"
+FRONTEND_BUILD_EXISTS = (STATIC_DIR / "index.html").exists()
+
+if FRONTEND_BUILD_EXISTS:
+    logger.info("✓ Frontend build found - serving React app at /")
+else:
+    logger.info("ℹ Frontend build not found - serving landing page at /")
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """
-    Production landing page for DueSense.
+    Serve the React frontend or landing page.
     
-    Serves the full marketing/product landing page with:
-    - Product description
-    - Features overview
-    - Live statistics from the database
-    - API documentation links
+    If frontend build exists in backend/static/, serve the React app.
+    Otherwise, serve the API landing/documentation page.
     """
-    # Read the landing page template
+    # Check if React build exists
+    static_index = Path(__file__).parent / "static" / "index.html"
+    
+    if static_index.exists():
+        with open(static_index, "r") as f:
+            return HTMLResponse(content=f.read(), status_code=200)
+    
+    # Fallback to landing page if no React build
     template_path = Path(__file__).parent / "templates" / "landing.html"
     
     try:
@@ -742,3 +756,46 @@ async def dashboard_stats():
         "tiers": {"tier_1": tier_1, "tier_2": tier_2, "tier_3": tier_3, "pass": tier_pass},
         "recent_companies": recent_list,
     }
+
+
+# ============ STATIC FILES & CLIENT-SIDE ROUTING ============
+
+# Serve static files (JS, CSS, images) from frontend build
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.exists() and (_static_dir / "static").exists():
+    # Mount the /static/js, /static/css, etc. from React build
+    app.mount("/static", StaticFiles(directory=_static_dir / "static"), name="static-assets")
+    logger.info("✓ Mounted static assets from /static")
+
+# Serve favicon and other root-level static files
+if _static_dir.exists():
+    for static_file in ["favicon.ico", "manifest.json", "robots.txt", "logo192.png", "logo512.png"]:
+        file_path = _static_dir / static_file
+        if file_path.exists():
+            @app.get(f"/{static_file}")
+            async def serve_static_file(file_path=file_path):
+                return FileResponse(file_path)
+
+
+# Catch-all route for client-side routing (React Router)
+# This must be defined AFTER all other routes
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def serve_spa(full_path: str):
+    """
+    Catch-all route for React Router client-side routing.
+    
+    Returns the React index.html for all non-API routes,
+    allowing React Router to handle the routing.
+    """
+    # Don't catch API routes
+    if full_path.startswith("api/") or full_path in ["docs", "redoc", "openapi.json", "health"]:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    # Serve React app if build exists
+    static_index = Path(__file__).parent / "static" / "index.html"
+    if static_index.exists():
+        with open(static_index, "r") as f:
+            return HTMLResponse(content=f.read(), status_code=200)
+    
+    # Otherwise return 404
+    raise HTTPException(status_code=404, detail="Not found")

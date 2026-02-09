@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { getCompanies, deleteCompany } from '../api';
-import { Building2, Trash2, ExternalLink, Clock, CheckCircle, AlertCircle, Loader2, Search } from 'lucide-react';
+import { Building2, Trash2, ExternalLink, CheckCircle, AlertCircle, Loader2, Search } from 'lucide-react';
 
 const STATUS_MAP = {
   processing: { color: 'text-warning', icon: Loader2, label: 'Processing' },

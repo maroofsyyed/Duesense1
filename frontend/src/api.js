@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_BACKEND_URL;
+// Use REACT_APP_BACKEND_URL if set, otherwise use same-origin (empty string)
+// This allows the frontend to work both as a separate deployment and when served by the backend
+const API_URL = process.env.REACT_APP_BACKEND_URL || '';
 
 const api = axios.create({
   baseURL: API_URL,

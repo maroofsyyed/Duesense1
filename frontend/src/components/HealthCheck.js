@@ -7,17 +7,9 @@ export const HealthCheck = () => {
   const [isVisible, setIsVisible] = useState(false);
 
   const checkHealth = async () => {
-    // Check if API URL is configured
-    if (!process.env.REACT_APP_BACKEND_URL) {
-      setHealth({
-        status: 'unhealthy',
-        message: 'Backend URL not configured. Please set REACT_APP_BACKEND_URL.',
-        lastChecked: new Date(),
-      });
-      setIsVisible(true);
-      return;
-    }
-
+    // Note: Empty REACT_APP_BACKEND_URL means same-origin deployment (valid configuration)
+    // Only show warning if frontend is deployed separately without backend URL configured
+    
     try {
       const response = await getHealth();
       if (response.status === 200) {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { getDashboardStats } from '../api';
-import { Building2, TrendingUp, AlertCircle, CheckCircle, Clock, ArrowRight, Zap } from 'lucide-react';
+import { Building2, AlertCircle, CheckCircle, Clock, ArrowRight, Zap } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 
 const TIER_COLORS = { tier_1: '#10b981', tier_2: '#6366f1', tier_3: '#f59e0b', pass: '#ef4444' };
