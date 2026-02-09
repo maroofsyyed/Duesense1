@@ -7,18 +7,25 @@ DueSense is a VC Deal Intelligence platform that analyzes startup pitch decks an
 ```
 DueSense/
 ├── backend/           # FastAPI backend
-│   ├── server.py      # Main API server
+│   ├── server.py      # Main API server (serves React frontend at /)
 │   ├── db.py          # Centralized MongoDB connection (lazy initialization)
+│   ├── static/        # React frontend build (served at root)
 │   ├── services/      # Business logic modules
 │   │   ├── enrichment_engine.py
 │   │   ├── scorer.py
 │   │   ├── memo_generator.py
 │   │   └── website_due_diligence.py
 │   ├── integrations/  # External API clients
+│   ├── templates/     # Landing page (fallback if no React build)
 │   ├── requirements.txt
 │   ├── runtime.txt    # Python version for Render (3.11.9)
 │   └── Dockerfile
-├── frontend/          # React frontend (Vercel deployment)
+├── frontend/          # React frontend source
+│   ├── src/
+│   │   ├── pages/     # Dashboard, Upload, Companies, CompanyDetail
+│   │   ├── components/# Sidebar, HealthCheck, ErrorBoundary
+│   │   └── api.js     # API client (supports same-origin deployment)
+│   └── build/         # Built files (not tracked, copied to backend/static)
 └── render.yaml        # Render deployment configuration
 ```
 
@@ -118,3 +125,49 @@ mongodb+srv://<username>:<password>@cluster.mongodb.net/<database>?retryWrites=t
 - Collection accessors are functions, not global variables
 - Services import: `import db as database`
 - Access collections via: `database.companies_collection()`
+
+## Frontend Deployment Architecture
+
+### Same-Origin Deployment (Current)
+The backend serves the React frontend from `backend/static/` at the root URL (`/`).
+
+**How it works:**
+1. Frontend is built with `npm run build` in `frontend/`
+2. Build output is copied to `backend/static/`
+3. Backend serves index.html for non-API routes
+4. Static assets (JS, CSS) served from `/static/`
+5. API routes (`/api/*`, `/health`, `/docs`) work normally
+
+**To update frontend:**
+```bash
+cd frontend
+npm install
+npm run build
+rm -rf ../backend/static
+cp -r build ../backend/static
+```
+
+### Separate Deployment (Alternative)
+Frontend can be deployed separately (e.g., Vercel) with:
+```bash
+REACT_APP_BACKEND_URL=https://api.dominionvault.com npm run build
+```
+
+### Frontend Features
+- **Dashboard**: Deal Pipeline overview with stats and tier distribution
+- **Upload**: Drag & drop pitch deck upload with optional website URL
+- **Companies**: List view with search and status filtering
+- **CompanyDetail**: Tabbed view with:
+  - Overview (scores, key metrics)
+  - Website Intel (deep website analysis)
+  - Enrichment (GitHub, news, research data)
+  - Scoring (6-dimension breakdown including Website DD)
+  - Memo (AI-generated investment memo)
+  - Competitors (competitive landscape)
+
+### Website Due Diligence Integration
+- Upload includes optional company website URL field
+- Website DD runs in parallel with deck extraction
+- Circular score visualization with breakdown
+- Green/red flags displayed on company detail page
+- Score includes `website_dd_score` (0-10 scale)
