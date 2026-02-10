@@ -236,13 +236,19 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Handle uncaught exceptions gracefully."""
-    logger.error(f"Unhandled exception: {type(exc).__name__}: {str(exc)[:200]}")
+    import traceback
+    error_detail = str(exc)[:500] if str(exc) else "Unknown error"
+    logger.error(f"Unhandled exception on {request.url.path}: {type(exc).__name__}: {error_detail}")
+    logger.error(f"Traceback:\n{traceback.format_exc()}")
+    
+    # Return detailed error for debugging (include detail in response)
     return JSONResponse(
         status_code=500,
         content={
             "error": "Internal server error",
-            "message": "An unexpected error occurred. Please try again later.",
-            "type": type(exc).__name__
+            "detail": error_detail,  # Include actual error for debugging
+            "type": type(exc).__name__,
+            "path": str(request.url.path)
         }
     )
 
@@ -379,7 +385,7 @@ async def health_check():
         from services.llm_provider import llm
         llm._validate_token()
         llm_ready = True
-        llm_model = llm.model
+        llm_model = llm.current_model  # Fixed: was llm.model
     except Exception as e:
         llm_error = str(e)[:100]
     
