@@ -162,9 +162,11 @@ def _validate_environment():
     else:
         logger.info(f"   ✓ HuggingFace API key: {hf_key[:8]}...")
     
-    # Log file size limit
-    max_file_size = os.environ.get("MAX_FILE_SIZE_MB", "25")
-    logger.info(f"   Max file size: {max_file_size}MB")
+    # Log file size limit (handle malformed env var)
+    raw_max_size = os.environ.get("MAX_FILE_SIZE_MB", "25")
+    if "=" in str(raw_max_size):
+        raw_max_size = str(raw_max_size).split("=")[-1]
+    logger.info(f"   Max file size: {raw_max_size}MB")
     
     # Log optional enrichment keys
     optional_keys = [
@@ -520,9 +522,20 @@ async def upload_deck(
         raise HTTPException(500, f"Failed to read uploaded file: {e}")
     
     # Validate file size
-    max_size = int(os.environ.get("MAX_FILE_SIZE_MB", 25)) * 1024 * 1024
+    def get_max_file_size_mb():
+        """Get max file size from env, handling malformed values."""
+        raw = os.environ.get("MAX_FILE_SIZE_MB", "25")
+        # Handle case where value might be "MAX_FILE_SIZE_MB=25" instead of "25"
+        if "=" in str(raw):
+            raw = str(raw).split("=")[-1]
+        try:
+            return int(raw)
+        except (ValueError, TypeError):
+            return 25  # Default fallback
+    
+    max_mb = get_max_file_size_mb()
+    max_size = max_mb * 1024 * 1024
     if file_size > max_size:
-        max_mb = os.environ.get('MAX_FILE_SIZE_MB', 25)
         logger.warning(f"❌ File too large: {file_size:,} bytes (max: {max_size:,})")
         raise HTTPException(400, f"File exceeds {max_mb}MB limit. Your file is {file_size / 1024 / 1024:.1f}MB")
     
