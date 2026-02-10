@@ -497,111 +497,126 @@ async def upload_deck(
     Accepts PDF and PPTX files up to MAX_FILE_SIZE_MB (default 25MB).
     Processing happens in the background - use /api/decks/{id}/status to check progress.
     """
-    logger.info(f"📤 Upload request: {file.filename} ({file.size} bytes)")
-    
-    # Validate file extension
-    file_ext = file.filename.split(".")[-1].lower()
-    if file_ext not in ["pdf", "pptx", "ppt"]:
-        logger.warning(f"❌ Rejected file type: {file_ext}")
-        raise HTTPException(400, f"Only PDF and PPTX files are supported. Got: .{file_ext}")
-
-    # Validate website URL if provided
-    if company_website:
-        company_website = company_website.strip()
-        if company_website and not company_website.startswith("http"):
-            company_website = "https://" + company_website
-        logger.info(f"  Website provided: {company_website}")
-
-    # Read and validate file content
+    # CRITICAL: Wrap entire function in try-except to never crash without returning JSON
     try:
-        content = await file.read()
-        file_size = len(content)
-        logger.info(f"✓ File read: {file_size:,} bytes")
-    except Exception as e:
-        logger.error(f"❌ Failed to read uploaded file: {e}")
-        raise HTTPException(500, f"Failed to read uploaded file: {e}")
-    
-    # Validate file size
-    def get_max_file_size_mb():
-        """Get max file size from env, handling malformed values."""
-        raw = os.environ.get("MAX_FILE_SIZE_MB", "25")
-        # Handle case where value might be "MAX_FILE_SIZE_MB=25" instead of "25"
-        if "=" in str(raw):
-            raw = str(raw).split("=")[-1]
+        logger.info(f"📤 Upload request: {file.filename} ({file.size} bytes)")
+        
+        # Validate file extension
+        file_ext = file.filename.split(".")[-1].lower()
+        if file_ext not in ["pdf", "pptx", "ppt"]:
+            logger.warning(f"❌ Rejected file type: {file_ext}")
+            raise HTTPException(400, f"Only PDF and PPTX files are supported. Got: .{file_ext}")
+
+        # Validate website URL if provided
+        if company_website:
+            company_website = company_website.strip()
+            if company_website and not company_website.startswith("http"):
+                company_website = "https://" + company_website
+            logger.info(f"  Website provided: {company_website}")
+
+        # Read and validate file content
         try:
-            return int(raw)
-        except (ValueError, TypeError):
-            return 25  # Default fallback
-    
-    max_mb = get_max_file_size_mb()
-    max_size = max_mb * 1024 * 1024
-    if file_size > max_size:
-        logger.warning(f"❌ File too large: {file_size:,} bytes (max: {max_size:,})")
-        raise HTTPException(400, f"File exceeds {max_mb}MB limit. Your file is {file_size / 1024 / 1024:.1f}MB")
-    
-    if file_size < 1000:  # Less than 1KB is suspicious
-        logger.warning(f"❌ File too small: {file_size} bytes")
-        raise HTTPException(400, "File appears to be empty or corrupted (less than 1KB)")
+            content = await file.read()
+            file_size = len(content)
+            logger.info(f"✓ File read: {file_size:,} bytes")
+        except Exception as e:
+            logger.error(f"❌ Failed to read uploaded file: {e}")
+            raise HTTPException(500, f"Failed to read uploaded file: {e}")
+        
+        # Validate file size
+        def get_max_file_size_mb():
+            """Get max file size from env, handling malformed values."""
+            raw = os.environ.get("MAX_FILE_SIZE_MB", "25")
+            # Handle case where value might be "MAX_FILE_SIZE_MB=25" instead of "25"
+            if "=" in str(raw):
+                raw = str(raw).split("=")[-1]
+            try:
+                return int(raw)
+            except (ValueError, TypeError):
+                return 25  # Default fallback
+        
+        max_mb = get_max_file_size_mb()
+        max_size = max_mb * 1024 * 1024
+        if file_size > max_size:
+            logger.warning(f"❌ File too large: {file_size:,} bytes (max: {max_size:,})")
+            raise HTTPException(400, f"File exceeds {max_mb}MB limit. Your file is {file_size / 1024 / 1024:.1f}MB")
+        
+        if file_size < 1000:  # Less than 1KB is suspicious
+            logger.warning(f"❌ File too small: {file_size} bytes")
+            raise HTTPException(400, "File appears to be empty or corrupted (less than 1KB)")
 
-    # Create company placeholder
-    try:
-        company_id = str(get_companies_col().insert_one({
-            "name": "Processing...",
-            "status": "processing",
-            "stage": None,
-            "website": company_website,
-            "tagline": None,
-            "founded_year": None,
-            "hq_location": None,
-            "website_source": "user_provided" if company_website else None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).inserted_id)
-        logger.info(f"✓ Company record created: {company_id}")
-    except Exception as e:
-        logger.error(f"❌ Failed to create company record: {e}")
-        raise HTTPException(500, f"Database error: Could not create company record")
+        # Create company placeholder
+        try:
+            company_id = str(get_companies_col().insert_one({
+                "name": "Processing...",
+                "status": "processing",
+                "stage": None,
+                "website": company_website,
+                "tagline": None,
+                "founded_year": None,
+                "hq_location": None,
+                "website_source": "user_provided" if company_website else None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).inserted_id)
+            logger.info(f"✓ Company record created: {company_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create company record: {e}")
+            raise HTTPException(500, f"Database error: Could not create company record")
 
-    # Save file locally
-    file_path = f"/tmp/decks/{uuid.uuid4()}.{file_ext}"
-    try:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, "wb") as f:
-            f.write(content)
-        logger.info(f"✓ File saved: {file_path}")
-    except Exception as e:
-        logger.error(f"❌ Failed to save file: {e}")
-        raise HTTPException(500, f"Failed to save uploaded file: {e}")
+        # Save file locally
+        file_path = f"/tmp/decks/{uuid.uuid4()}.{file_ext}"
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, "wb") as f:
+                f.write(content)
+            logger.info(f"✓ File saved: {file_path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to save file: {e}")
+            raise HTTPException(500, f"Failed to save uploaded file: {e}")
 
-    # Create deck record
-    try:
-        deck_id = str(get_pitch_decks_col().insert_one({
+        # Create deck record
+        try:
+            deck_id = str(get_pitch_decks_col().insert_one({
+                "company_id": company_id,
+                "file_path": file_path,
+                "file_name": file.filename,
+                "file_size": file_size,
+                "website_source": company_website,
+                "processing_status": "uploading",
+                "extracted_data": None,
+                "error_message": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }).inserted_id)
+            logger.info(f"✓ Deck record created: {deck_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create deck record: {e}")
+            raise HTTPException(500, f"Database error: Could not create deck record")
+
+        # Process in background
+        background_tasks.add_task(process_deck_pipeline, deck_id, company_id, file_path, file_ext, company_website)
+        logger.info(f"🚀 Background processing started for deck {deck_id}")
+
+        return {
+            "deck_id": deck_id,
             "company_id": company_id,
-            "file_path": file_path,
-            "file_name": file.filename,
-            "file_size": file_size,
-            "website_source": company_website,
-            "processing_status": "uploading",
-            "extracted_data": None,
-            "error_message": None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }).inserted_id)
-        logger.info(f"✓ Deck record created: {deck_id}")
+            "status": "processing",
+            "website_provided": bool(company_website),
+            "message": "Deck uploaded successfully. Analysis in progress." + (" Website due diligence will run in parallel." if company_website else ""),
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is (they have proper status codes)
+        raise
     except Exception as e:
-        logger.error(f"❌ Failed to create deck record: {e}")
-        raise HTTPException(500, f"Database error: Could not create deck record")
-
-    # Process in background
-    background_tasks.add_task(process_deck_pipeline, deck_id, company_id, file_path, file_ext, company_website)
-    logger.info(f"🚀 Background processing started for deck {deck_id}")
-
-    return {
-        "deck_id": deck_id,
-        "company_id": company_id,
-        "status": "processing",
-        "website_provided": bool(company_website),
-        "message": "Deck uploaded successfully. Analysis in progress." + (" Website due diligence will run in parallel." if company_website else ""),
-    }
+        # Catch ALL other errors - never let the function crash without returning JSON
+        import traceback
+        logger.error(f"❌ Upload failed with unexpected error: {type(e).__name__}: {str(e)}")
+        logger.error(f"Traceback:\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Upload failed: {str(e)[:200]}"  # Truncate error for safety
+        )
 
 
 async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, file_ext: str, company_website: str = None):

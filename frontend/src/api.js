@@ -13,15 +13,22 @@ const api = axios.create({
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    // Handle network errors
+    // Provide user-friendly error messages
     if (error.code === 'ECONNABORTED') {
-      error.message = 'Request timeout. The backend may be slow or unavailable.';
+      error.userMessage = 'Request timeout. Please try again.';
     } else if (error.message === 'Network Error' || !error.response) {
-      error.message = 'Cannot connect to backend. Please check your connection.';
+      error.userMessage = 'Cannot connect to server. Please check your connection.';
     } else if (error.response?.status === 503) {
-      error.message = 'Backend service is unavailable. Please try again later.';
+      error.userMessage = 'Service temporarily unavailable. Please try again later.';
+    } else if (error.response?.status === 429) {
+      error.userMessage = 'Rate limit exceeded. Please wait a moment and try again.';
     } else if (error.response?.status >= 500) {
-      error.message = 'Backend server error. Please try again later.';
+      // For 500 errors, try to get the detail from the response
+      error.userMessage = error.response?.data?.detail || 'Server error. Please try again later.';
+    } else if (error.response?.data?.detail) {
+      error.userMessage = error.response.data.detail;
+    } else {
+      error.userMessage = error.message || 'An error occurred';
     }
     return Promise.reject(error);
   }

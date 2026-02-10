@@ -75,14 +75,13 @@ export default function Upload() {
       }, 3000);
     } catch (e) {
       setUploading(false);
-      // Extract error message from various possible response formats
-      const errorMsg = e.response?.data?.detail || 
+      // Use the user-friendly message from interceptor, with fallbacks
+      const errorMsg = e.userMessage || 
+                       e.response?.data?.detail || 
                        e.response?.data?.message || 
-                       e.response?.data?.error ||
-                       e.message || 
                        'Upload failed. Please try again.';
       setError(errorMsg);
-      console.error('Upload error:', e.response?.data || e);
+      console.error('Upload error:', e);
     }
   };
 
