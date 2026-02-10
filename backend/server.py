@@ -153,14 +153,23 @@ def _validate_environment():
     db_name = os.environ.get("DB_NAME", "duesense")
     logger.info(f"   Database name: {db_name}")
     
-    # Check HuggingFace LLM provider
+    # Check LLM providers (Z.ai, GROQ, HuggingFace)
+    z_key = os.environ.get("Z_API_KEY")
+    groq_key = os.environ.get("GROQ_API_KEY")
     hf_key = os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN")
-    if not hf_key:
-        logger.error("❌ HUGGINGFACE_API_KEY not set - AI features will not work")
-    elif not hf_key.startswith("hf_"):
-        logger.warning(f"⚠️ HuggingFace token may be invalid (should start with 'hf_'): {hf_key[:10]}...")
+    
+    llm_providers = []
+    if z_key:
+        llm_providers.append(f"Z.ai ({z_key[:8]}...)")
+    if groq_key:
+        llm_providers.append(f"GROQ ({groq_key[:8]}...)")
+    if hf_key:
+        llm_providers.append(f"HuggingFace ({hf_key[:8]}...)")
+    
+    if llm_providers:
+        logger.info(f"   ✓ LLM providers: {', '.join(llm_providers)}")
     else:
-        logger.info(f"   ✓ HuggingFace API key: {hf_key[:8]}...")
+        logger.error("❌ No LLM API keys set - AI features will not work")
     
     # Log file size limit (handle malformed env var)
     raw_max_size = os.environ.get("MAX_FILE_SIZE_MB", "25")
@@ -387,7 +396,7 @@ async def health_check():
         from services.llm_provider import llm
         llm._validate_token()
         llm_ready = True
-        llm_model = llm.current_model  # Fixed: was llm.model
+        llm_model = f"{llm.current_provider['name']}: {llm.current_model}"
     except Exception as e:
         llm_error = str(e)[:100]
     
