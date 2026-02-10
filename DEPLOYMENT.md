@@ -23,7 +23,7 @@ Before starting, ensure you have:
 
 - ✅ A GitHub account
 - ✅ Your code pushed to GitHub repository: `maroofsyyed-duesense`
-- ✅ All API keys and secrets ready (MongoDB Atlas, Upstash Redis, Supabase, GitHub, ScraperAPI, SerpAPI, NewsAPI, Groq, HuggingFace, OCR.space, PDF.co, Alpha Vantage, Abstract API, Hunter)
+- ✅ All API keys and secrets ready (MongoDB Atlas, HuggingFace API key, GitHub token, optional: ScraperAPI, SerpAPI, NewsAPI)
 - ✅ Domain name: `dominionvault.com` (with DNS access)
 - ✅ Render account (free tier)
 - ✅ Vercel account (free tier)
@@ -71,12 +71,12 @@ In the **"Environment"** section, add these variables one by one:
 #### Required Variables
 
 ```
-MONGO_URL
+MONGODB_URI
 ```
 - **Value:** Your MongoDB Atlas connection string (starts with `mongodb+srv://`)
 - **Format:** `mongodb+srv://<username>:<password>@cluster.mongodb.net/<database>?retryWrites=true&w=majority`
 - **Important:** 
-  - Use `MONGO_URL` (not `MONGODB_URI`)
+  - You can use either `MONGODB_URI` or `MONGO_URL` (the app accepts both)
   - Password should be URL-encoded if it contains special characters
   - No spaces in the connection string
 
@@ -85,6 +85,13 @@ DB_NAME
 ```
 - **Value:** Your MongoDB database name (e.g., `duesense`)
 
+```
+HUGGINGFACE_API_KEY
+```
+- **Value:** Your HuggingFace API token (starts with `hf_`)
+- **Get it from:** [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+- **Note:** You can also use `HF_TOKEN` as the variable name
+
 #### Optional Configuration
 
 ```
@@ -92,55 +99,27 @@ MAX_FILE_SIZE_MB
 ```
 - **Value:** `25` (default, adjust if needed)
 
-#### API Keys (Add all that apply)
-
-```
-EMERGENT_LLM_KEY
-```
-- **Value:** Your Emergent LLM API key
-
-```
-GROQ_API_KEY
-```
-- **Value:** Your Groq API key (if using Groq)
-
-```
-OLLAMA_URL
-```
-- **Value:** `http://localhost:11434` (only if using local Ollama, usually leave empty)
+#### Optional Enrichment API Keys
 
 ```
 GITHUB_TOKEN
 ```
-- **Value:** Your GitHub personal access token
+- **Value:** Your GitHub personal access token (for repository analysis)
 
 ```
 NEWS_API_KEY
 ```
-- **Value:** Your NewsAPI key
+- **Value:** Your NewsAPI key (for news enrichment)
 
 ```
 SERPAPI_KEY
 ```
-- **Value:** Your SerpAPI key
+- **Value:** Your SerpAPI key (for search enrichment)
 
 ```
 SCRAPER_API_KEY
 ```
-- **Value:** Your ScraperAPI key
-
-#### Additional Services (if configured)
-
-Add environment variables for:
-- `REDIS_URL` (Upstash Redis connection string)
-- `SUPABASE_URL` (if using Supabase)
-- `SUPABASE_KEY` (if using Supabase)
-- `OCR_SPACE_API_KEY` (if using OCR.space)
-- `PDF_CO_API_KEY` (if using PDF.co)
-- `ALPHA_VANTAGE_API_KEY` (if using Alpha Vantage)
-- `ABSTRACT_API_KEY` (if using Abstract API)
-- `HUNTER_API_KEY` (if using Hunter)
-- `HUGGINGFACE_API_KEY` (if using HuggingFace)
+- **Value:** Your ScraperAPI key (for web scraping)
 
 **How to add each variable:**
 1. Click **"Add Environment Variable"**
@@ -618,10 +597,9 @@ Run through this checklist to ensure everything works:
    - **Fix:** Ensure `backend/runtime.txt` contains `python-3.11.9`
    - **Fix:** Clear build cache in Render after updating `runtime.txt`
 
-3. **Wrong MongoDB environment variable name**
-   - ❌ `MONGODB_URI` (incorrect)
-   - ✅ `MONGO_URL` (correct - as used in code)
-   - Must match exactly what the code expects
+3. **MongoDB environment variable**
+   - ✅ Both `MONGODB_URI` and `MONGO_URL` are accepted
+   - The app checks for either variable
 
 4. **Trailing slashes in URLs**
    - ❌ `https://backend.onrender.com/`
