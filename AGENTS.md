@@ -11,6 +11,7 @@ DueSense/
 │   ├── db.py          # Centralized MongoDB connection (lazy initialization)
 │   ├── static/        # React frontend build (served at root)
 │   ├── services/      # Business logic modules
+│   │   ├── llm_provider.py      # HuggingFace LLM integration
 │   │   ├── enrichment_engine.py
 │   │   ├── scorer.py
 │   │   ├── memo_generator.py
@@ -19,7 +20,7 @@ DueSense/
 │   ├── templates/     # Landing page (fallback if no React build)
 │   ├── requirements.txt
 │   ├── runtime.txt    # Python version for Render (3.11.9)
-│   └── Dockerfile
+│   └── Dockerfile     # Uses python:3.11.9-bullseye for OpenSSL compatibility
 ├── frontend/          # React frontend source
 │   ├── src/
 │   │   ├── pages/     # Dashboard, Upload, Companies, CompanyDetail
@@ -31,15 +32,23 @@ DueSense/
 
 ## Backend Architecture
 
+### LLM Provider
+- **Primary**: HuggingFace Inference API with `meta-llama/Meta-Llama-3.1-70B-Instruct`
+- **Fallback Models**: Mixtral 8x7B, Llama 3.1 8B, Zephyr 7B
+- **Auto-fallback**: On rate limits or model unavailability
+- **Configuration**: Set `HUGGINGFACE_API_KEY` or `HF_TOKEN` environment variable
+
 ### Database Connection Pattern
 - **Lazy initialization**: MongoDB client is created on first use, not at import time
 - **Centralized module**: All services import `db.py` for database access
 - **Connection resilience**: App starts even if MongoDB is temporarily unavailable
 - **Retries**: 3 connection attempts with 5-second delays during startup
+- **SSL/TLS**: Uses certifi CA bundle for MongoDB Atlas compatibility
 
 ### Key Files
 - `backend/db.py` - Centralized MongoDB connection management
 - `backend/server.py` - FastAPI app with lifespan manager
+- `backend/services/llm_provider.py` - HuggingFace LLM integration
 - `backend/runtime.txt` - Python version specification (`python-3.11.9`)
 
 ## Build & Run Commands
@@ -50,6 +59,7 @@ cd backend
 pip install -r requirements.txt
 export MONGODB_URI="mongodb+srv://..."
 export DB_NAME="duesense"
+export HUGGINGFACE_API_KEY="hf_..."
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -57,7 +67,11 @@ uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```bash
 cd backend
 docker build -t duesense-backend .
-docker run -p 10000:10000 -e MONGODB_URI="..." -e DB_NAME="..." duesense-backend
+docker run -p 10000:10000 \
+  -e MONGODB_URI="..." \
+  -e DB_NAME="duesense" \
+  -e HUGGINGFACE_API_KEY="hf_..." \
+  duesense-backend
 ```
 
 ## Environment Variables
@@ -67,13 +81,15 @@ docker run -p 10000:10000 -e MONGODB_URI="..." -e DB_NAME="..." duesense-backend
 |----------|-------------|
 | `MONGODB_URI` or `MONGO_URL` | MongoDB Atlas connection string |
 | `DB_NAME` | Database name (default: `duesense`) |
+| `HUGGINGFACE_API_KEY` or `HF_TOKEN` | HuggingFace API token for LLM |
 
 ### Optional
 | Variable | Description |
 |----------|-------------|
 | `PORT` | Server port (Render sets this, default: 8000) |
-| `EMERGENT_LLM_KEY` | LLM API key for AI processing |
-| `GROQ_API_KEY` | Alternative LLM provider |
+| `GITHUB_TOKEN` | GitHub token for repo analysis |
+| `NEWS_API_KEY` | NewsAPI key for news enrichment |
+| `SERPAPI_KEY` | SerpAPI key for search |
 | `MAX_FILE_SIZE_MB` | Max upload size (default: 25) |
 | `ALLOWED_ORIGINS` | CORS origins (comma-separated, default: *) |
 

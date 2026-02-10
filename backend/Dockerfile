@@ -1,7 +1,8 @@
 # DueSense Backend Dockerfile
-# Production-ready Python 3.11.9 image with MongoDB Atlas SSL support
+# Production-ready Python 3.11.9 with MongoDB Atlas SSL support
+# Uses Bullseye for OpenSSL 1.1.1 compatibility with MongoDB Atlas
 
-FROM python:3.11.9-slim-bookworm
+FROM python:3.11.9-bullseye
 
 # Set working directory
 WORKDIR /app
@@ -23,8 +24,9 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
-# Verify OpenSSL version
-RUN openssl version && python --version
+# Verify OpenSSL version (should show 1.1.1.x for MongoDB Atlas compatibility)
+RUN echo "=== OpenSSL Version ===" && openssl version && \
+    echo "=== Python Version ===" && python --version
 
 # Copy requirements first (for Docker layer caching)
 COPY requirements.txt .
@@ -34,9 +36,11 @@ RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
 # Verify critical packages are installed correctly
-RUN python -c "import certifi; print(f'Certifi CA Bundle: {certifi.where()}')" && \
+RUN echo "=== Verifying Critical Packages ===" && \
+    python -c "import certifi; print(f'Certifi CA Bundle: {certifi.where()}')" && \
     python -c "import pymongo; print(f'PyMongo version: {pymongo.__version__}')" && \
-    python -c "import ssl; print(f'SSL version: {ssl.OPENSSL_VERSION}')"
+    python -c "import ssl; print(f'SSL version: {ssl.OPENSSL_VERSION}')" && \
+    python -c "import httpx; print(f'HTTPX version: {httpx.__version__}')"
 
 # Copy application code
 COPY . .

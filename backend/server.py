@@ -99,9 +99,6 @@ async def lifespan(app: FastAPI):
 
 def _validate_environment():
     """Validate required environment variables and log warnings."""
-    required_vars = ["MONGODB_URI", "MONGO_URL"]  # At least one must be set
-    optional_vars = ["DB_NAME", "EMERGENT_LLM_KEY", "GROQ_API_KEY", "MAX_FILE_SIZE_MB"]
-    
     # Check MongoDB URL
     mongo_url = os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URL")
     if not mongo_url:
@@ -109,7 +106,7 @@ def _validate_environment():
     else:
         # Mask the URL for logging
         safe_url = mongo_url[:30] + "..." if len(mongo_url) > 30 else mongo_url
-        logger.info(f"MongoDB URL configured: {safe_url}")
+        logger.info(f"✓ MongoDB URL configured: {safe_url}")
     
     # Log optional vars status
     db_name = os.environ.get("DB_NAME", "duesense")
@@ -118,13 +115,20 @@ def _validate_environment():
     max_file_size = os.environ.get("MAX_FILE_SIZE_MB", "25")
     logger.info(f"Max file size: {max_file_size}MB")
     
-    # Check LLM providers
-    if os.environ.get("EMERGENT_LLM_KEY"):
-        logger.info("✓ EMERGENT_LLM_KEY configured")
-    elif os.environ.get("GROQ_API_KEY"):
-        logger.info("✓ GROQ_API_KEY configured")
+    # Check HuggingFace LLM provider
+    hf_key = os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN")
+    if hf_key:
+        logger.info(f"✓ HuggingFace API key configured: {hf_key[:8]}...")
     else:
-        logger.warning("⚠ No LLM API key configured (EMERGENT_LLM_KEY or GROQ_API_KEY)")
+        logger.warning("⚠ No LLM API key configured (HUGGINGFACE_API_KEY or HF_TOKEN)")
+    
+    # Log optional enrichment keys
+    if os.environ.get("GITHUB_TOKEN"):
+        logger.info("✓ GitHub token configured")
+    if os.environ.get("NEWS_API_KEY"):
+        logger.info("✓ News API key configured")
+    if os.environ.get("SERPAPI_KEY"):
+        logger.info("✓ SerpAPI key configured")
 
 
 # Create FastAPI app with lifespan manager
@@ -304,29 +308,47 @@ async def health_check():
     Health check endpoint for Render and other monitoring systems.
 
     ALWAYS returns 200 OK to keep the service alive.
-    Reports database connectivity status in the response body.
+    Reports database and LLM connectivity status in the response body.
     """
     db_connected = False
     db_error = None
+    llm_ready = False
+    llm_error = None
+    llm_model = None
     
+    # Test MongoDB connection
     try:
-        # Test MongoDB connection
         client = database.get_client()
         client.admin.command('ping')
         db_connected = True
     except Exception as e:
         db_error = str(e)[:100]  # Truncate error message
     
+    # Test LLM provider readiness
+    try:
+        from services.llm_provider import llm
+        llm._validate_token()
+        llm_ready = True
+        llm_model = llm.model
+    except Exception as e:
+        llm_error = str(e)[:100]
+    
+    # Determine overall status
+    overall_status = "healthy" if (db_connected and llm_ready) else "degraded"
+    
     # Always return 200 OK - Render health checks expect this
     return JSONResponse(
         status_code=200,
         content={
-            "status": "ok",
+            "status": overall_status,
             "service": "duesense-backend",
-            "db_connected": db_connected,
+            "database": "connected" if db_connected else "disconnected",
+            "llm": "ready" if llm_ready else "unavailable",
+            "llm_model": llm_model,
             "python_version": sys.version.split()[0],
             "timestamp": datetime.now(timezone.utc).isoformat(),
             **({"db_error": db_error} if db_error else {}),
+            **({"llm_error": llm_error} if llm_error else {}),
         }
     )
 
@@ -334,7 +356,19 @@ async def health_check():
 @app.get("/api/health")
 async def api_health():
     """Simple health check for API consumers."""
-    return {"status": "ok", "service": "vc-deal-intelligence"}
+    db_ok = False
+    try:
+        client = database.get_client()
+        client.admin.command('ping')
+        db_ok = True
+    except Exception:
+        pass
+    
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "service": "vc-deal-intelligence",
+        "database": "connected" if db_ok else "disconnected"
+    }
 
 
 # ============ COMPANY ENDPOINTS ============
