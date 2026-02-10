@@ -52,15 +52,15 @@ async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
     
-    Handles startup (MongoDB connection, indexes) and shutdown (connection cleanup).
-    The app will start even if MongoDB is temporarily unavailable, with retries.
+    Handles startup (MongoDB connection, LLM validation, indexes) and shutdown.
+    The app will start even if some services are temporarily unavailable.
     """
     logger.info("=" * 60)
-    logger.info("Starting DueSense Backend API...")
-    logger.info(f"Python version: {sys.version}")
+    logger.info("🚀 Starting DueSense Backend API")
+    logger.info(f"   Python version: {sys.version.split()[0]}")
     logger.info("=" * 60)
     
-    # Validate environment variables at startup (warn but don't crash)
+    # Validate environment variables at startup
     _validate_environment()
     
     # Try to connect to MongoDB with retries
@@ -70,23 +70,62 @@ async def lifespan(app: FastAPI):
     
     for attempt in range(1, max_retries + 1):
         try:
-            logger.info(f"Attempting MongoDB connection (attempt {attempt}/{max_retries})...")
+            logger.info(f"🔌 MongoDB connection (attempt {attempt}/{max_retries})...")
             database.test_connection(max_retries=1, retry_delay=1)
             database.create_indexes()
             db_connected = True
-            logger.info("✓ MongoDB connection established successfully")
+            
+            # Log MongoDB info
+            try:
+                client = database.get_client()
+                info = client.server_info()
+                logger.info(f"✓ MongoDB connected (v{info.get('version', 'unknown')})")
+            except Exception:
+                logger.info("✓ MongoDB connected")
             break
         except Exception as e:
-            logger.warning(f"MongoDB connection attempt {attempt} failed: {e}")
+            logger.warning(f"⚠️ MongoDB attempt {attempt} failed: {e}")
             if attempt < max_retries:
-                logger.info(f"Retrying in {retry_delay} seconds...")
+                logger.info(f"   Retrying in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
             else:
-                logger.error("⚠ MongoDB connection failed after all retries")
-                logger.error("The app will start but database operations will fail until MongoDB is available")
+                logger.error("❌ MongoDB connection failed after all retries")
+                logger.error("   The app will start but database operations will fail")
     
+    # Test LLM provider (non-blocking)
+    llm_ready = False
+    try:
+        from services.llm_provider import llm
+        llm._validate_token()
+        logger.info(f"✓ LLM provider initialized")
+        logger.info(f"   Primary model: {llm.current_model}")
+        logger.info(f"   Fallback models: {len(llm.models) - 1}")
+        llm_ready = True
+        
+        # Optional: Quick test call (can be slow on cold start)
+        # Uncomment to test LLM at startup
+        # try:
+        #     await llm.test_connection()
+        # except Exception as e:
+        #     logger.warning(f"⚠️ LLM test call failed (non-critical): {e}")
+        
+    except Exception as e:
+        logger.error(f"❌ LLM provider initialization failed: {e}")
+        logger.error("   AI features will not work until this is fixed")
+    
+    # Summary
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Server ready on port {port}")
+    logger.info("=" * 60)
+    if db_connected and llm_ready:
+        logger.info("✅ All systems operational")
+    else:
+        status = []
+        if not db_connected:
+            status.append("Database")
+        if not llm_ready:
+            status.append("LLM")
+        logger.warning(f"⚠️ Starting with issues: {', '.join(status)}")
+    logger.info(f"   Server ready on port {port}")
     logger.info("=" * 60)
     
     yield  # App is running
@@ -99,36 +138,47 @@ async def lifespan(app: FastAPI):
 
 def _validate_environment():
     """Validate required environment variables and log warnings."""
+    logger.info("📋 Environment validation:")
+    
     # Check MongoDB URL
     mongo_url = os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URL")
     if not mongo_url:
-        logger.warning("⚠ Neither MONGODB_URI nor MONGO_URL is set. Database operations will fail.")
+        logger.error("❌ MONGODB_URI not set - database will not work")
     else:
         # Mask the URL for logging
         safe_url = mongo_url[:30] + "..." if len(mongo_url) > 30 else mongo_url
-        logger.info(f"✓ MongoDB URL configured: {safe_url}")
+        logger.info(f"   ✓ MongoDB URL: {safe_url}")
     
-    # Log optional vars status
+    # Log DB name
     db_name = os.environ.get("DB_NAME", "duesense")
-    logger.info(f"Database name: {db_name}")
-    
-    max_file_size = os.environ.get("MAX_FILE_SIZE_MB", "25")
-    logger.info(f"Max file size: {max_file_size}MB")
+    logger.info(f"   Database name: {db_name}")
     
     # Check HuggingFace LLM provider
     hf_key = os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN")
-    if hf_key:
-        logger.info(f"✓ HuggingFace API key configured: {hf_key[:8]}...")
+    if not hf_key:
+        logger.error("❌ HUGGINGFACE_API_KEY not set - AI features will not work")
+    elif not hf_key.startswith("hf_"):
+        logger.warning(f"⚠️ HuggingFace token may be invalid (should start with 'hf_'): {hf_key[:10]}...")
     else:
-        logger.warning("⚠ No LLM API key configured (HUGGINGFACE_API_KEY or HF_TOKEN)")
+        logger.info(f"   ✓ HuggingFace API key: {hf_key[:8]}...")
+    
+    # Log file size limit
+    max_file_size = os.environ.get("MAX_FILE_SIZE_MB", "25")
+    logger.info(f"   Max file size: {max_file_size}MB")
     
     # Log optional enrichment keys
-    if os.environ.get("GITHUB_TOKEN"):
-        logger.info("✓ GitHub token configured")
-    if os.environ.get("NEWS_API_KEY"):
-        logger.info("✓ News API key configured")
-    if os.environ.get("SERPAPI_KEY"):
-        logger.info("✓ SerpAPI key configured")
+    optional_keys = [
+        ("GITHUB_TOKEN", "GitHub"),
+        ("NEWS_API_KEY", "NewsAPI"),
+        ("SERPAPI_KEY", "SerpAPI"),
+        ("SCRAPER_API_KEY", "ScraperAPI"),
+    ]
+    configured = []
+    for key, name in optional_keys:
+        if os.environ.get(key):
+            configured.append(name)
+    if configured:
+        logger.info(f"   Optional APIs: {', '.join(configured)}")
 
 
 # Create FastAPI app with lifespan manager
@@ -433,75 +483,128 @@ async def upload_deck(
     file: UploadFile = File(...),
     company_website: Optional[str] = Form(None),
 ):
+    """
+    Upload a pitch deck for analysis.
+    
+    Accepts PDF and PPTX files up to MAX_FILE_SIZE_MB (default 25MB).
+    Processing happens in the background - use /api/decks/{id}/status to check progress.
+    """
+    logger.info(f"📤 Upload request: {file.filename} ({file.size} bytes)")
+    
+    # Validate file extension
     file_ext = file.filename.split(".")[-1].lower()
     if file_ext not in ["pdf", "pptx", "ppt"]:
-        raise HTTPException(400, "Only PDF and PPTX files are supported")
+        logger.warning(f"❌ Rejected file type: {file_ext}")
+        raise HTTPException(400, f"Only PDF and PPTX files are supported. Got: .{file_ext}")
 
     # Validate website URL if provided
     if company_website:
         company_website = company_website.strip()
         if company_website and not company_website.startswith("http"):
             company_website = "https://" + company_website
+        logger.info(f"  Website provided: {company_website}")
 
-    content = await file.read()
-    file_size = len(content)
+    # Read and validate file content
+    try:
+        content = await file.read()
+        file_size = len(content)
+        logger.info(f"✓ File read: {file_size:,} bytes")
+    except Exception as e:
+        logger.error(f"❌ Failed to read uploaded file: {e}")
+        raise HTTPException(500, f"Failed to read uploaded file: {e}")
+    
+    # Validate file size
     max_size = int(os.environ.get("MAX_FILE_SIZE_MB", 25)) * 1024 * 1024
     if file_size > max_size:
-        raise HTTPException(400, f"File exceeds {os.environ.get('MAX_FILE_SIZE_MB', 25)}MB limit")
+        max_mb = os.environ.get('MAX_FILE_SIZE_MB', 25)
+        logger.warning(f"❌ File too large: {file_size:,} bytes (max: {max_size:,})")
+        raise HTTPException(400, f"File exceeds {max_mb}MB limit. Your file is {file_size / 1024 / 1024:.1f}MB")
+    
+    if file_size < 1000:  # Less than 1KB is suspicious
+        logger.warning(f"❌ File too small: {file_size} bytes")
+        raise HTTPException(400, "File appears to be empty or corrupted (less than 1KB)")
 
     # Create company placeholder
-    company_id = str(get_companies_col().insert_one({
-        "name": "Processing...",
-        "status": "processing",
-        "stage": None,
-        "website": company_website,
-        "tagline": None,
-        "founded_year": None,
-        "hq_location": None,
-        "website_source": "user_provided" if company_website else None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).inserted_id)
+    try:
+        company_id = str(get_companies_col().insert_one({
+            "name": "Processing...",
+            "status": "processing",
+            "stage": None,
+            "website": company_website,
+            "tagline": None,
+            "founded_year": None,
+            "hq_location": None,
+            "website_source": "user_provided" if company_website else None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).inserted_id)
+        logger.info(f"✓ Company record created: {company_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to create company record: {e}")
+        raise HTTPException(500, f"Database error: Could not create company record")
 
     # Save file locally
     file_path = f"/tmp/decks/{uuid.uuid4()}.{file_ext}"
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "wb") as f:
-        f.write(content)
+    try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        logger.info(f"✓ File saved: {file_path}")
+    except Exception as e:
+        logger.error(f"❌ Failed to save file: {e}")
+        raise HTTPException(500, f"Failed to save uploaded file: {e}")
 
     # Create deck record
-    deck_id = str(get_pitch_decks_col().insert_one({
-        "company_id": company_id,
-        "file_path": file_path,
-        "file_name": file.filename,
-        "file_size": file_size,
-        "website_source": company_website,
-        "processing_status": "uploading",
-        "extracted_data": None,
-        "error_message": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }).inserted_id)
+    try:
+        deck_id = str(get_pitch_decks_col().insert_one({
+            "company_id": company_id,
+            "file_path": file_path,
+            "file_name": file.filename,
+            "file_size": file_size,
+            "website_source": company_website,
+            "processing_status": "uploading",
+            "extracted_data": None,
+            "error_message": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }).inserted_id)
+        logger.info(f"✓ Deck record created: {deck_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to create deck record: {e}")
+        raise HTTPException(500, f"Database error: Could not create deck record")
 
     # Process in background
     background_tasks.add_task(process_deck_pipeline, deck_id, company_id, file_path, file_ext, company_website)
+    logger.info(f"🚀 Background processing started for deck {deck_id}")
 
     return {
         "deck_id": deck_id,
         "company_id": company_id,
         "status": "processing",
         "website_provided": bool(company_website),
-        "message": "Deck uploaded. Processing started." + (" Website due diligence will run in parallel." if company_website else ""),
+        "message": "Deck uploaded successfully. Analysis in progress." + (" Website due diligence will run in parallel." if company_website else ""),
     }
 
 
 async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, file_ext: str, company_website: str = None):
-    """Full pipeline: extract (+website DD in parallel) -> enrich -> score -> memo"""
+    """
+    Full processing pipeline: extract → enrich → score → memo
+    
+    This runs in the background after upload.
+    Website due diligence runs in parallel with deck extraction if URL provided.
+    """
     import asyncio
+    
+    logger.info(f"=" * 60)
+    logger.info(f"🔄 Starting pipeline for deck {deck_id}, company {company_id}")
+    logger.info(f"   File: {file_path}, Website: {company_website or 'None'}")
+    logger.info(f"=" * 60)
+    
     deck_obj_id = validate_object_id(deck_id)
     company_obj_id = validate_object_id(company_id)
     
     try:
         # Step 1: Extract deck + optional website DD in parallel
+        logger.info(f"📋 Step 1/4: Extracting deck content...")
         get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "extracting"}}
@@ -516,19 +619,27 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         # Run deck extraction and website due diligence in parallel
         tasks = [extract_deck(file_path, file_ext)]
         if company_website:
+            logger.info(f"   Also running website due diligence for: {company_website}")
             from services.website_due_diligence import run_website_due_diligence
             tasks.append(run_website_due_diligence(company_id, company_website))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        extracted = results[0] if not isinstance(results[0], Exception) else {}
+        # Handle deck extraction result
+        extracted = {}
         if isinstance(results[0], Exception):
-            raise results[0]
+            error_msg = f"Deck extraction failed: {type(results[0]).__name__}: {results[0]}"
+            logger.error(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+        else:
+            extracted = results[0]
+            logger.info(f"✓ Deck extracted successfully")
 
         # Handle website DD result - ensure failures are persisted cleanly
         website_dd_result = None
         if company_website and len(results) > 1:
             if isinstance(results[1], Exception):
+                logger.warning(f"⚠️ Website DD failed: {results[1]}")
                 # Persist website DD failure in enrichment_sources
                 try:
                     get_enrichment_col().insert_one({
@@ -546,6 +657,8 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
                     })
                 except Exception as persist_err:
                     logger.error(f"Failed to persist website DD error: {persist_err}")
+            else:
+                logger.info(f"✓ Website DD completed")
             website_dd_result = results[1] if not isinstance(results[1], Exception) else {"error": str(results[1])}
 
         get_pitch_decks_col().update_one(
@@ -556,11 +669,14 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         # Update company with extracted data
         # User-provided website takes priority over deck-extracted website
         company_data = extracted.get("company", {})
+        company_name = company_data.get("name", "Unknown Company")
         final_website = company_website or company_data.get("website")
+        logger.info(f"✓ Company identified: {company_name}")
+        
         get_companies_col().update_one(
             {"_id": company_obj_id},
             {"$set": {
-                "name": company_data.get("name", "Unknown Company"),
+                "name": company_name,
                 "tagline": company_data.get("tagline"),
                 "website": final_website,
                 "stage": company_data.get("stage"),
@@ -576,7 +692,10 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             extracted["company"]["website"] = company_website
 
         # Save founders
-        for f in extracted.get("founders", []):
+        founders = extracted.get("founders", [])
+        if founders:
+            logger.info(f"   Saving {len(founders)} founders...")
+        for f in founders:
             get_founders_col().insert_one({
                 "company_id": company_id,
                 "name": f.get("name", "Unknown"),
@@ -588,7 +707,8 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
 
-        # Step 2: Enrich (website_intelligence in enrichment engine will use the website)
+        # Step 2: Enrich
+        logger.info(f"🔍 Step 2/4: Running enrichment...")
         get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "enriching"}}
@@ -598,9 +718,10 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         try:
             from services.enrichment_engine import enrich_company
             enrichment_data = await enrich_company(company_id, extracted)
+            logger.info(f"✓ Enrichment completed")
         except Exception as enrich_err:
-            logger.error(f"Enrichment failed for company {company_id}: {type(enrich_err).__name__}")
-            enrichment_data = {"error": "Enrichment failed"}
+            logger.error(f"⚠️ Enrichment failed: {type(enrich_err).__name__}: {enrich_err}")
+            enrichment_data = {"error": str(enrich_err)}
 
         get_companies_col().update_one(
             {"_id": company_obj_id},
@@ -608,6 +729,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         )
 
         # Step 3: Score
+        logger.info(f"📊 Step 3/4: Calculating investment score...")
         get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "scoring"}}
@@ -617,9 +739,12 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         try:
             from services.scorer import calculate_investment_score
             score_data = await calculate_investment_score(company_id, extracted, enrichment_data)
+            tier = score_data.get("tier", "Unknown")
+            total = score_data.get("total_score", 0)
+            logger.info(f"✓ Score calculated: {total}/100 ({tier})")
         except Exception as score_err:
-            logger.error(f"Scoring failed for company {company_id}: {type(score_err).__name__}")
-            score_data = {"error": "Scoring failed"}
+            logger.error(f"⚠️ Scoring failed: {type(score_err).__name__}: {score_err}")
+            score_data = {"error": str(score_err)}
 
         get_companies_col().update_one(
             {"_id": company_obj_id},
@@ -627,6 +752,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         )
 
         # Step 4: Generate Memo
+        logger.info(f"📝 Step 4/4: Generating investment memo...")
         get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
             {"$set": {"processing_status": "generating_memo"}}
@@ -635,8 +761,9 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         try:
             from services.memo_generator import generate_memo
             memo_data = await generate_memo(company_id, extracted, enrichment_data, score_data)
+            logger.info(f"✓ Memo generated")
         except Exception as memo_err:
-            logger.error(f"Memo generation failed for company {company_id}: {type(memo_err).__name__}")
+            logger.error(f"⚠️ Memo generation failed: {type(memo_err).__name__}: {memo_err}")
 
         # Final status
         get_pitch_decks_col().update_one(
@@ -647,14 +774,26 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             {"_id": company_obj_id},
             {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}}
         )
+        
+        logger.info(f"=" * 60)
+        logger.info(f"✅ Pipeline COMPLETED for {company_name}")
+        logger.info(f"   Deck ID: {deck_id}")
+        logger.info(f"   Company ID: {company_id}")
+        logger.info(f"=" * 60)
 
     except Exception as e:
-        # Sanitize error logging - no secrets exposed
+        # Log full error with traceback for debugging
+        import traceback
         error_msg = str(e)
-        logger.error(f"Pipeline failed for deck {deck_id}, company {company_id}: {error_msg}")
+        logger.error(f"=" * 60)
+        logger.error(f"❌ Pipeline FAILED for deck {deck_id}, company {company_id}")
+        logger.error(f"   Error: {type(e).__name__}: {error_msg}")
+        logger.error(f"   Traceback:\n{traceback.format_exc()}")
+        logger.error(f"=" * 60)
+        
         get_pitch_decks_col().update_one(
             {"_id": deck_obj_id},
-            {"$set": {"processing_status": "failed", "error_message": error_msg}}
+            {"$set": {"processing_status": "failed", "error_message": error_msg[:500]}}
         )
         get_companies_col().update_one(
             {"_id": company_obj_id},
