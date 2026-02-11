@@ -5,7 +5,7 @@ services:
     plan: free
     rootDir: backend
     dockerfilePath: ./Dockerfile
-    dockerContext: .
+    dockerContext: ./
     healthCheckPath: /health
     envVars:
       - key: PORT
