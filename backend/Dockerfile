@@ -37,10 +37,18 @@ RUN pip install --upgrade pip && \
 
 # Verify critical packages are installed correctly
 RUN echo "=== Verifying Critical Packages ===" && \
-    python -c "import certifi; print(f'Certifi CA Bundle: {certifi.where()}')" && \
-    python -c "import pymongo; print(f'PyMongo version: {pymongo.__version__}')" && \
-    python -c "import ssl; print(f'SSL version: {ssl.OPENSSL_VERSION}')" && \
-    python -c "import httpx; print(f'HTTPX version: {httpx.__version__}')"
+    python - << 'EOF'
+import ssl
+import certifi
+import pymongo
+import httpx
+
+print("Certifi CA Bundle:", certifi.where())
+print("PyMongo version:", pymongo.__version__)
+print("SSL version:", ssl.OPENSSL_VERSION)
+print("HTTPX version:", httpx.__version__)
+EOF
+
 
 # Copy application code
 COPY . .
