@@ -57,3 +57,4 @@ temp/
 .coverage
 htmlcov/
 .pytest_cache/
+backend/.env
