@@ -29,7 +29,7 @@ RUN echo "=== OpenSSL Version ===" && openssl version && \
     echo "=== Python Version ===" && python --version
 
 # Copy requirements first (for Docker layer caching)
-COPY requirements.txt .
+COPY backend/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --upgrade pip && \
