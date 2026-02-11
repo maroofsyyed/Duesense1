@@ -5,7 +5,6 @@ Uses centralized database connection from db module.
 """
 import asyncio
 from datetime import datetime, timezone
-from bson import ObjectId
 import logging
 
 # Use centralized database module
@@ -17,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_enrichment_col():
-    """Get enrichment sources collection (lazy)."""
+    """Get enrichment sources table (lazy)."""
     return database.enrichment_collection()
 
 
 def get_competitors_col():
-    """Get competitors collection (lazy)."""
+    """Get competitors table (lazy)."""
     return database.competitors_collection()
 
 
@@ -70,7 +69,7 @@ async def _enrich_github(company_id: str, company_name: str) -> dict:
         repos = await gh.analyze_repositories(org["login"])
         data["repositories"] = repos
 
-    get_enrichment_col().insert_one({
+    get_enrichment_col().insert({
         "company_id": company_id,
         "source_type": "github",
         "source_url": org.get("html_url", "https://github.com"),
@@ -85,7 +84,7 @@ async def _enrich_news(company_id: str, company_name: str) -> dict:
     news = NewsClient()
     data = await news.search_company_news(company_name)
 
-    get_enrichment_col().insert_one({
+    get_enrichment_col().insert({
         "company_id": company_id,
         "source_type": "news",
         "source_url": "https://newsapi.org",
@@ -101,7 +100,7 @@ async def _enrich_competitors(company_id: str, company_name: str, product_desc: 
     data = await serp.find_competitors(company_name, product_desc)
 
     for comp in data.get("competitors", []):
-        get_competitors_col().insert_one({
+        get_competitors_col().insert({
             "company_id": company_id,
             "name": comp.get("title", ""),
             "url": comp.get("url", ""),
@@ -110,7 +109,7 @@ async def _enrich_competitors(company_id: str, company_name: str, product_desc: 
             "discovered_at": datetime.now(timezone.utc).isoformat(),
         })
 
-    get_enrichment_col().insert_one({
+    get_enrichment_col().insert({
         "company_id": company_id,
         "source_type": "competitors",
         "source_url": "https://serpapi.com",
@@ -125,7 +124,7 @@ async def _enrich_market(company_id: str, industry: str) -> dict:
     serp = SerpClient()
     data = await serp.search_market(industry)
 
-    get_enrichment_col().insert_one({
+    get_enrichment_col().insert({
         "company_id": company_id,
         "source_type": "market_research",
         "source_url": "https://serpapi.com",
@@ -140,7 +139,7 @@ async def _enrich_website(company_id: str, website: str) -> dict:
     scraper = ScraperClient()
     data = await scraper.scrape_website(website)
 
-    get_enrichment_col().insert_one({
+    get_enrichment_col().insert({
         "company_id": company_id,
         "source_type": "website",
         "source_url": website,
@@ -219,7 +218,7 @@ async def _enrich_website_deep(company_id: str, website: str) -> dict:
         "crawl_timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    get_enrichment_col().insert_one({
+    get_enrichment_col().insert({
         "company_id": company_id,
         "source_type": "website_intelligence",
         "source_url": website,

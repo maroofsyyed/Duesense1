@@ -47,8 +47,8 @@ async def get_public_stats():
     No authentication required. Returns limited public data.
     """
     try:
-        companies_col = database.companies_collection()
-        total = companies_col.count_documents({})
+        companies_tbl = database.companies_collection()
+        total = companies_tbl.count()
         system_status = "operational"
     except Exception:
         total = 0
@@ -69,25 +69,25 @@ async def get_dashboard_stats(api_key: str = Depends(verify_api_key)):
     
     Requires API key authentication.
     """
-    companies_col = database.companies_collection()
-    scores_col = database.scores_collection()
+    companies_tbl = database.companies_collection()
+    scores_tbl = database.scores_collection()
     
-    total = companies_col.count_documents({})
+    total = companies_tbl.count()
     
     # Status breakdown
     processing_statuses = ["processing", "extracting", "enriching", "scoring", "generating_memo"]
     status_breakdown = {
-        "processing": companies_col.count_documents({"status": {"$in": processing_statuses}}),
-        "completed": companies_col.count_documents({"status": "completed"}),
-        "failed": companies_col.count_documents({"status": "failed"})
+        "processing": companies_tbl.count({"status": {"$in": processing_statuses}}),
+        "completed": companies_tbl.count({"status": "completed"}),
+        "failed": companies_tbl.count({"status": "failed"})
     }
     
     # Tier distribution
     tier_distribution = {
-        "TIER_1": scores_col.count_documents({"tier": "TIER_1"}),
-        "TIER_2": scores_col.count_documents({"tier": "TIER_2"}),
-        "TIER_3": scores_col.count_documents({"tier": "TIER_3"}),
-        "PASS": scores_col.count_documents({"tier": "PASS"})
+        "TIER_1": scores_tbl.count({"tier": "TIER_1"}),
+        "TIER_2": scores_tbl.count({"tier": "TIER_2"}),
+        "TIER_3": scores_tbl.count({"tier": "TIER_3"}),
+        "PASS": scores_tbl.count({"tier": "PASS"})
     }
     
     # Processing metrics
@@ -98,13 +98,17 @@ async def get_dashboard_stats(api_key: str = Depends(verify_api_key)):
     }
     
     # Recent companies
-    recent = list(companies_col.find({"status": "completed"}).sort("created_at", -1).limit(5))
+    recent = companies_tbl.find_many(
+        filters={"status": "completed"},
+        order_by="created_at",
+        order_desc=True,
+        limit=5
+    )
     recent_companies = []
     for r in recent:
-        r_id = str(r["_id"])
-        score = scores_col.find_one({"company_id": r_id}, {"_id": 0})
+        score = scores_tbl.find_one({"company_id": r["id"]})
         recent_companies.append({
-            "id": r_id,
+            "id": r["id"],
             "name": r.get("name", "Unknown"),
             "status": r.get("status"),
             "tier": score.get("tier") if score else None,
@@ -129,31 +133,31 @@ async def get_tier_insights(api_key: str = Depends(verify_api_key)):
     
     Requires API key authentication.
     """
-    scores_col = database.scores_collection()
-    total = scores_col.count_documents({})
+    scores_tbl = database.scores_collection()
+    total = scores_tbl.count()
     
     tiers = [
         {
             "tier": "TIER_1",
-            "count": scores_col.count_documents({"tier": "TIER_1"}),
+            "count": scores_tbl.count({"tier": "TIER_1"}),
             "description": "High-priority deals - Strong investment potential",
             "criteria": "Score >= 80"
         },
         {
             "tier": "TIER_2", 
-            "count": scores_col.count_documents({"tier": "TIER_2"}),
+            "count": scores_tbl.count({"tier": "TIER_2"}),
             "description": "Medium-priority deals - Worth further review",
             "criteria": "Score 60-79"
         },
         {
             "tier": "TIER_3",
-            "count": scores_col.count_documents({"tier": "TIER_3"}),
+            "count": scores_tbl.count({"tier": "TIER_3"}),
             "description": "Low-priority deals - Significant concerns",
             "criteria": "Score 40-59"
         },
         {
             "tier": "PASS",
-            "count": scores_col.count_documents({"tier": "PASS"}),
+            "count": scores_tbl.count({"tier": "PASS"}),
             "description": "Not recommended - Multiple red flags",
             "criteria": "Score < 40"
         }
@@ -177,11 +181,11 @@ async def get_summary(authenticated: Optional[str] = Depends(optional_api_key)):
     Returns more details if authenticated.
     """
     try:
-        companies_col = database.companies_collection()
-        scores_col = database.scores_collection()
+        companies_tbl = database.companies_collection()
+        scores_tbl = database.scores_collection()
         
-        total = companies_col.count_documents({})
-        completed = companies_col.count_documents({"status": "completed"})
+        total = companies_tbl.count()
+        completed = companies_tbl.count({"status": "completed"})
         
         summary = {
             "total_deals": total,
@@ -192,9 +196,15 @@ async def get_summary(authenticated: Optional[str] = Depends(optional_api_key)):
         
         # Add more details for authenticated users
         if authenticated:
-            summary["tier_1_deals"] = scores_col.count_documents({"tier": "TIER_1"})
-            summary["average_score"] = _calculate_average_score(scores_col)
-            summary["processing"] = companies_col.count_documents({
+            summary["tier_1_deals"] = scores_tbl.count({"tier": "TIER_1"})
+            # Calculate average score
+            all_scores = scores_tbl.find_many()
+            if all_scores:
+                avg = sum(s.get("total_score", 0) for s in all_scores) / len(all_scores)
+                summary["average_score"] = round(avg, 2)
+            else:
+                summary["average_score"] = 0
+            summary["processing"] = companies_tbl.count({
                 "status": {"$in": ["processing", "extracting", "enriching", "scoring", "generating_memo"]}
             })
             summary["authenticated"] = True
@@ -212,14 +222,3 @@ async def get_summary(authenticated: Optional[str] = Depends(optional_api_key)):
             "error": "Database temporarily unavailable",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-
-
-def _calculate_average_score(scores_col):
-    """Calculate average score across all scored deals."""
-    pipeline = [
-        {"$group": {"_id": None, "avg_score": {"$avg": "$total_score"}}}
-    ]
-    result = list(scores_col.aggregate(pipeline))
-    if result and result[0].get("avg_score"):
-        return round(result[0]["avg_score"], 2)
-    return 0

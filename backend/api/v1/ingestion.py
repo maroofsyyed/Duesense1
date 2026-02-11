@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
 from pydantic import BaseModel, Field
-from bson import ObjectId
 import db as database
 from api.v1.auth import verify_api_key
 import logging
@@ -47,26 +46,15 @@ class ProcessingStage(BaseModel):
 # Background task for processing
 async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, file_ext: str, company_website: str = None):
     """Process deck through the full pipeline."""
-    from bson import ObjectId
-    
-    deck_obj_id = ObjectId(deck_id)
-    company_obj_id = ObjectId(company_id)
-    
-    pitch_decks_col = database.pitch_decks_collection()
-    companies_col = database.companies_collection()
-    founders_col = database.founders_collection()
-    enrichment_col = database.enrichment_collection()
+    pitch_decks_tbl = database.pitch_decks_collection()
+    companies_tbl = database.companies_collection()
+    founders_tbl = database.founders_collection()
+    enrichment_tbl = database.enrichment_collection()
     
     try:
         # Step 1: Extract
-        pitch_decks_col.update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "extracting"}}
-        )
-        companies_col.update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "extracting"}}
-        )
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "extracting"})
+        companies_tbl.update({"id": company_id}, {"status": "extracting"})
         
         from services.deck_processor import extract_deck
         import asyncio
@@ -82,34 +70,31 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
         if isinstance(results[0], Exception):
             raise results[0]
         
-        pitch_decks_col.update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"extracted_data": extracted, "processing_status": "extracted"}}
+        pitch_decks_tbl.update(
+            {"id": deck_id},
+            {"extracted_data": extracted, "processing_status": "extracted"}
         )
         
         # Update company with extracted data
         company_data = extracted.get("company", {})
         final_website = company_website or company_data.get("website")
-        companies_col.update_one(
-            {"_id": company_obj_id},
-            {"$set": {
-                "name": company_data.get("name", "Unknown Company"),
-                "tagline": company_data.get("tagline"),
-                "website": final_website,
-                "stage": company_data.get("stage"),
-                "founded_year": company_data.get("founded"),
-                "hq_location": company_data.get("hq_location"),
-                "status": "enriching",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }}
-        )
+        companies_tbl.update({"id": company_id}, {
+            "name": company_data.get("name", "Unknown Company"),
+            "tagline": company_data.get("tagline"),
+            "website": final_website,
+            "stage": company_data.get("stage"),
+            "founded_year": company_data.get("founded"),
+            "hq_location": company_data.get("hq_location"),
+            "status": "enriching",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
         
         if company_website and "company" in extracted:
             extracted["company"]["website"] = company_website
         
         # Save founders
         for f in extracted.get("founders", []):
-            founders_col.insert_one({
+            founders_tbl.insert({
                 "company_id": company_id,
                 "name": f.get("name", "Unknown"),
                 "role": f.get("role"),
@@ -121,10 +106,7 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             })
         
         # Step 2: Enrich
-        pitch_decks_col.update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "enriching"}}
-        )
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "enriching"})
         
         enrichment_data = {}
         try:
@@ -134,16 +116,10 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             logger.error(f"Enrichment failed: {type(e).__name__}")
             enrichment_data = {"error": "Enrichment failed"}
         
-        companies_col.update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "scoring"}}
-        )
+        companies_tbl.update({"id": company_id}, {"status": "scoring"})
         
         # Step 3: Score
-        pitch_decks_col.update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "scoring"}}
-        )
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "scoring"})
         
         score_data = {}
         try:
@@ -153,16 +129,10 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             logger.error(f"Scoring failed: {type(e).__name__}")
             score_data = {"error": "Scoring failed"}
         
-        companies_col.update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "generating_memo"}}
-        )
+        companies_tbl.update({"id": company_id}, {"status": "generating_memo"})
         
         # Step 4: Generate Memo
-        pitch_decks_col.update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "generating_memo"}}
-        )
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "generating_memo"})
         
         try:
             from services.memo_generator import generate_memo
@@ -171,26 +141,23 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             logger.error(f"Memo generation failed: {type(e).__name__}")
         
         # Final status
-        pitch_decks_col.update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "completed"}}
-        )
-        companies_col.update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}}
-        )
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "completed"})
+        companies_tbl.update({"id": company_id}, {
+            "status": "completed",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
         
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Pipeline failed for deck {deck_id}: {error_msg}")
-        pitch_decks_col.update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "failed", "error_message": error_msg}}
-        )
-        companies_col.update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()}}
-        )
+        pitch_decks_tbl.update({"id": deck_id}, {
+            "processing_status": "failed",
+            "error_message": error_msg
+        })
+        companies_tbl.update({"id": company_id}, {
+            "status": "failed",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
     finally:
         try:
             if os.path.exists(file_path):
@@ -240,22 +207,21 @@ async def upload_deck(
             detail=f"File exceeds {os.environ.get('MAX_FILE_SIZE_MB', 25)}MB limit"
         )
     
-    companies_col = database.companies_collection()
-    pitch_decks_col = database.pitch_decks_collection()
+    companies_tbl = database.companies_collection()
+    pitch_decks_tbl = database.pitch_decks_collection()
+    
+    now_iso = datetime.now(timezone.utc).isoformat()
     
     # Create company placeholder
-    company_id = str(companies_col.insert_one({
+    company_row = companies_tbl.insert({
         "name": "Processing...",
         "status": "processing",
-        "stage": None,
         "website": company_website,
-        "tagline": None,
-        "founded_year": None,
-        "hq_location": None,
         "website_source": "user_provided" if company_website else None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).inserted_id)
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
+    company_id = company_row["id"]
     
     # Save file locally
     file_path = f"/tmp/decks/{uuid.uuid4()}.{file_ext}"
@@ -264,17 +230,16 @@ async def upload_deck(
         f.write(content)
     
     # Create deck record
-    deck_id = str(pitch_decks_col.insert_one({
+    deck_row = pitch_decks_tbl.insert({
         "company_id": company_id,
         "file_path": file_path,
         "file_name": file.filename,
         "file_size": file_size,
         "website_source": company_website,
         "processing_status": "uploading",
-        "extracted_data": None,
-        "error_message": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }).inserted_id)
+        "created_at": now_iso,
+    })
+    deck_id = deck_row["id"]
     
     # Process in background
     background_tasks.add_task(
@@ -303,18 +268,18 @@ async def get_ingestion_status(deck_id: str, api_key: str = Depends(verify_api_k
     Requires API key authentication.
     """
     try:
-        obj_id = ObjectId(deck_id)
-    except Exception:
+        uuid.UUID(deck_id)
+    except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid deck ID format")
     
-    pitch_decks_col = database.pitch_decks_collection()
-    deck = pitch_decks_col.find_one({"_id": obj_id})
+    pitch_decks_tbl = database.pitch_decks_collection()
+    deck = pitch_decks_tbl.find_by_id(deck_id)
     
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
     
     return IngestionStatusResponse(
-        deck_id=str(deck["_id"]),
+        deck_id=deck["id"],
         company_id=deck.get("company_id"),
         status=deck.get("processing_status", "unknown"),
         processing_status=deck.get("processing_status", "unknown"),

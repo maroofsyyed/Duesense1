@@ -23,12 +23,12 @@ API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 # In production, store API keys in database or secure vault
 # For now, we support environment-based keys
 def get_valid_api_keys() -> set:
-    """Get valid API keys from environment."""
+    """Get valid API keys from environment with security checks."""
     keys = set()
     
     # Primary API key
     primary_key = os.environ.get("DUESENSE_API_KEY")
-    if primary_key:
+    if primary_key and primary_key != "demo-key-for-testing":
         keys.add(primary_key)
     
     # Additional keys (comma-separated)
@@ -36,13 +36,22 @@ def get_valid_api_keys() -> set:
     if additional_keys:
         for key in additional_keys.split(","):
             key = key.strip()
-            if key:
+            if key and len(key) >= 16:  # Minimum key length
                 keys.add(key)
     
-    # Default demo key for development (disable in production)
-    if os.environ.get("ENABLE_DEMO_KEY", "true").lower() == "true":
+    # Demo key ONLY if explicitly enabled (NEVER in production)
+    if os.environ.get("ENABLE_DEMO_KEY", "false").lower() == "true":
         keys.add("demo-key-for-testing")
+        logger.warning("Demo API key enabled - NOT for production use!")
     
+    if not keys:
+        logger.error("No valid API keys configured!")
+        raise ValueError(
+            "No API keys configured. Set DUESENSE_API_KEY environment variable.\n"
+            "Never use 'demo-key-for-testing' in production."
+        )
+    
+    logger.info(f"{len(keys)} API key(s) configured")
     return keys
 
 

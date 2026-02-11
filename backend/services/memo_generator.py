@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_memos_col():
-    """Get investment memos collection (lazy)."""
+    """Get investment memos table (lazy)."""
     return database.memos_collection()
 
 
 def get_enrichment_col():
-    """Get enrichment sources collection (lazy)."""
+    """Get enrichment sources table (lazy)."""
     return database.enrichment_collection()
 
 
@@ -141,10 +141,6 @@ IMPORTANT: Every factual claim must have a [SOURCE: ...] citation."""
     memo_data["status"] = "completed"
 
     # Upsert memo
-    get_memos_col().update_one(
-        {"company_id": company_id},
-        {"$set": memo_data},
-        upsert=True,
-    )
+    get_memos_col().upsert(memo_data, conflict_column="company_id")
 
     return memo_data

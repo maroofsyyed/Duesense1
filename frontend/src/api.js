@@ -3,10 +3,19 @@ import axios from 'axios';
 // Use REACT_APP_BACKEND_URL if set, otherwise use same-origin (empty string)
 // This allows the frontend to work both as a separate deployment and when served by the backend
 const API_URL = process.env.REACT_APP_BACKEND_URL || '';
+const API_KEY = process.env.REACT_APP_API_KEY;
 
 const api = axios.create({
   baseURL: API_URL,
   timeout: 300000,
+});
+
+// Add request interceptor for API key
+api.interceptors.request.use((config) => {
+  if (API_KEY) {
+    config.headers['X-API-Key'] = API_KEY;
+  }
+  return config;
 });
 
 // Add response interceptor for better error handling

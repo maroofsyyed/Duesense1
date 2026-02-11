@@ -5,7 +5,6 @@ Uses centralized database connection from db module.
 """
 import asyncio
 from datetime import datetime, timezone
-from bson import ObjectId
 import logging
 
 # Use centralized database module
@@ -24,12 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_scores_col():
-    """Get investment scores collection (lazy)."""
+    """Get investment scores table (lazy)."""
     return database.scores_collection()
 
 
 def get_enrichment_col():
-    """Get enrichment sources collection (lazy)."""
+    """Get enrichment sources table (lazy)."""
     return database.enrichment_collection()
 
 # Updated scoring weights
@@ -116,10 +115,8 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
     # Find website_due_diligence enrichment
     dd_data = None
     if isinstance(enrichment, dict):
-        # Check if enrichment is the full dict with website_due_diligence key
         if "website_due_diligence" in enrichment:
             dd_data = enrichment["website_due_diligence"]
-        # Or if it's a list of enrichment records, find the right one
         elif "data" in enrichment:
             dd_data = enrichment.get("data", {})
     
@@ -227,7 +224,6 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
     api_available = product_signals.get("api_available", "not_mentioned")
     if api_available in ("true", True):
         technical_score += 1
-        # Already added to green flags above
     
     integrations = product_signals.get("integrations", [])
     if integrations and len(integrations) > 0:
@@ -237,7 +233,6 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
     certifications = trust_signals.get("certifications", [])
     if certifications and len(certifications) > 0:
         technical_score += 0.5
-        # Will add to green flags in trust section
     
     # 5. TRUST & COMPLIANCE (0-1 point)
     security_page = trust_signals.get("security_page_exists", False)
@@ -293,13 +288,13 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
 async def calculate_investment_score(company_id: str, extracted: dict, enrichment: dict) -> dict:
     """Run all agents in parallel and compile final score."""
 
-    # Fetch website DD enrichment separately from MongoDB
+    # Fetch website DD enrichment from Supabase
     website_dd_enrichment = None
-    website_dd_data = get_enrichment_col().find_one(
+    website_dd_row = get_enrichment_col().find_one(
         {"company_id": company_id, "source_type": "website_due_diligence"}
     )
-    if website_dd_data:
-        website_dd_enrichment = website_dd_data.get("data", {})
+    if website_dd_row:
+        website_dd_enrichment = website_dd_row.get("data", {})
 
     results = await asyncio.gather(
         agent_founder_quality(extracted, enrichment),
@@ -376,11 +371,7 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    get_scores_col().update_one(
-        {"company_id": company_id},
-        {"$set": score_data},
-        upsert=True,
-    )
+    get_scores_col().upsert(score_data, conflict_column="company_id")
 
     return score_data
 

@@ -5,8 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
-from bson import ObjectId
-from bson.errors import InvalidId
+import uuid
 import db as database
 from api.v1.auth import verify_api_key, optional_api_key
 
@@ -60,20 +59,12 @@ class DealStatsResponse(BaseModel):
 
 
 # Helper functions
-def serialize_company(doc) -> dict:
-    """Serialize MongoDB document to dict."""
-    if doc is None:
-        return None
-    doc = dict(doc)
-    doc["id"] = str(doc.pop("_id"))
-    return doc
-
-
-def validate_object_id(id_str: str) -> ObjectId:
-    """Validate and return ObjectId."""
+def validate_uuid(id_str: str) -> str:
+    """Validate UUID format."""
     try:
-        return ObjectId(id_str)
-    except (InvalidId, TypeError):
+        uuid.UUID(id_str)
+        return id_str
+    except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail=f"Invalid ID format: {id_str}")
 
 
@@ -90,33 +81,35 @@ async def list_deals(
     
     Requires API key authentication.
     """
-    companies_col = database.companies_collection()
-    scores_col = database.scores_collection()
+    companies_tbl = database.companies_collection()
+    scores_tbl = database.scores_collection()
     
-    # Build query
-    query = {}
+    # Build query filters
+    filters = {}
     if status:
-        query["status"] = status
+        filters["status"] = status
     
     # Get total count
-    total = companies_col.count_documents(query)
+    total = companies_tbl.count(filters)
     
     # Get paginated results
     skip = (page - 1) * page_size
-    companies = list(
-        companies_col.find(query)
-        .sort("created_at", -1)
-        .skip(skip)
-        .limit(page_size)
+    companies = companies_tbl.find_many(
+        filters=filters,
+        order_by="created_at",
+        order_desc=True,
+        offset=skip,
+        limit=page_size
     )
     
-    # Serialize and add scores
+    # Add scores
     deals = []
     for c in companies:
-        deal = serialize_company(c)
-        score = scores_col.find_one({"company_id": deal["id"]}, {"_id": 0})
-        deal["score"] = score
-        deals.append(deal)
+        score = scores_tbl.find_one({"company_id": c["id"]})
+        if score:
+            score.pop("id", None)
+        c["score"] = score
+        deals.append(c)
     
     return DealListResponse(
         deals=deals,
@@ -133,31 +126,31 @@ async def get_deal_stats(api_key: str = Depends(verify_api_key)):
     
     Requires API key authentication.
     """
-    companies_col = database.companies_collection()
-    scores_col = database.scores_collection()
+    companies_tbl = database.companies_collection()
+    scores_tbl = database.scores_collection()
     
-    total = companies_col.count_documents({})
+    total = companies_tbl.count()
     
     # Status breakdown
     by_status = {
-        "processing": companies_col.count_documents({"status": {"$in": ["processing", "extracting", "enriching", "scoring", "generating_memo"]}}),
-        "completed": companies_col.count_documents({"status": "completed"}),
-        "failed": companies_col.count_documents({"status": "failed"})
+        "processing": companies_tbl.count({"status": {"$in": ["processing", "extracting", "enriching", "scoring", "generating_memo"]}}),
+        "completed": companies_tbl.count({"status": "completed"}),
+        "failed": companies_tbl.count({"status": "failed"})
     }
     
     # Tier breakdown
     by_tier = {
-        "tier_1": scores_col.count_documents({"tier": "TIER_1"}),
-        "tier_2": scores_col.count_documents({"tier": "TIER_2"}),
-        "tier_3": scores_col.count_documents({"tier": "TIER_3"}),
-        "pass": scores_col.count_documents({"tier": "PASS"})
+        "tier_1": scores_tbl.count({"tier": "TIER_1"}),
+        "tier_2": scores_tbl.count({"tier": "TIER_2"}),
+        "tier_3": scores_tbl.count({"tier": "TIER_3"}),
+        "pass": scores_tbl.count({"tier": "PASS"})
     }
     
     # Recent activity
-    recent = list(companies_col.find().sort("created_at", -1).limit(5))
+    recent = companies_tbl.find_many(order_by="created_at", order_desc=True, limit=5)
     recent_activity = [
         {
-            "id": str(r["_id"]),
+            "id": r["id"],
             "name": r.get("name", "Unknown"),
             "status": r.get("status"),
             "created_at": r.get("created_at")
@@ -180,30 +173,32 @@ async def get_deal(deal_id: str, api_key: str = Depends(verify_api_key)):
     
     Requires API key authentication.
     """
-    obj_id = validate_object_id(deal_id)
+    validate_uuid(deal_id)
     
-    companies_col = database.companies_collection()
-    company = companies_col.find_one({"_id": obj_id})
+    companies_tbl = database.companies_collection()
+    company = companies_tbl.find_by_id(deal_id)
     
     if not company:
         raise HTTPException(status_code=404, detail="Deal not found")
     
-    company_data = serialize_company(company)
-    
     # Get related data
-    pitch_decks = list(database.pitch_decks_collection().find({"company_id": deal_id}))
-    founders = list(database.founders_collection().find({"company_id": deal_id}))
-    enrichments = list(database.enrichment_collection().find({"company_id": deal_id}))
-    score = database.scores_collection().find_one({"company_id": deal_id}, {"_id": 0})
-    memo = database.memos_collection().find_one({"company_id": deal_id}, {"_id": 0})
+    pitch_decks = database.pitch_decks_collection().find_many({"company_id": deal_id})
+    founders = database.founders_collection().find_many({"company_id": deal_id})
+    enrichments = database.enrichment_collection().find_many({"company_id": deal_id})
+    score = database.scores_collection().find_one({"company_id": deal_id})
+    if score:
+        score.pop("id", None)
+    memo = database.memos_collection().find_one({"company_id": deal_id})
+    if memo:
+        memo.pop("id", None)
     
     return DealDetailResponse(
-        company=company_data,
+        company=company,
         score=score,
         memo=memo,
-        pitch_decks=[serialize_company(d) for d in pitch_decks],
-        founders=[serialize_company(f) for f in founders],
-        enrichments=[serialize_company(e) for e in enrichments]
+        pitch_decks=pitch_decks,
+        founders=founders,
+        enrichments=enrichments
     )
 
 
@@ -214,15 +209,15 @@ async def delete_deal(deal_id: str, api_key: str = Depends(verify_api_key)):
     
     Requires API key authentication.
     """
-    obj_id = validate_object_id(deal_id)
+    validate_uuid(deal_id)
     
-    # Delete from all collections
-    database.companies_collection().delete_one({"_id": obj_id})
-    database.pitch_decks_collection().delete_many({"company_id": deal_id})
-    database.founders_collection().delete_many({"company_id": deal_id})
-    database.enrichment_collection().delete_many({"company_id": deal_id})
-    database.scores_collection().delete_many({"company_id": deal_id})
-    database.competitors_collection().delete_many({"company_id": deal_id})
-    database.memos_collection().delete_many({"company_id": deal_id})
+    # Delete from all tables
+    database.pitch_decks_collection().delete({"company_id": deal_id})
+    database.founders_collection().delete({"company_id": deal_id})
+    database.enrichment_collection().delete({"company_id": deal_id})
+    database.scores_collection().delete({"company_id": deal_id})
+    database.competitors_collection().delete({"company_id": deal_id})
+    database.memos_collection().delete({"company_id": deal_id})
+    database.companies_collection().delete({"id": deal_id})
     
     return {"status": "deleted", "deal_id": deal_id}

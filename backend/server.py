@@ -2,7 +2,7 @@
 DueSense Backend API Server
 
 Production-ready FastAPI server with:
-- Lazy MongoDB initialization
+- Lazy Supabase initialization
 - Versioned API (v1)
 - API Key authentication
 - Production landing page
@@ -12,8 +12,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTa
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from bson import ObjectId
-from bson.errors import InvalidId
+from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -27,18 +26,27 @@ from pathlib import Path
 
 load_dotenv()
 
-# Configure logging - production-appropriate level
+# Enhanced logging configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format=LOG_FORMAT,
+    handlers=[
+        logging.StreamHandler(),
+    ]
 )
-logger = logging.getLogger(__name__)
 
-# Reduce noise from third-party libraries
+logger = logging.getLogger("duesense")
+logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+
+# Reduce noise from dependencies
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("pymongo").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+logger.info(f"Logging configured at {LOG_LEVEL} level")
 
 # Import the centralized database module (lazy initialization)
 import db as database
@@ -51,145 +59,128 @@ from api.v1.router import router as api_v1_router
 async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
-    
-    Handles startup (MongoDB connection, LLM validation, indexes) and shutdown.
+
+    Handles startup (Supabase connection, LLM validation) and shutdown.
     The app will start even if some services are temporarily unavailable.
     """
     logger.info("=" * 60)
-    logger.info("🚀 Starting DueSense Backend API")
+    logger.info("Starting DueSense Backend API")
     logger.info(f"   Python version: {sys.version.split()[0]}")
     logger.info("=" * 60)
-    
+
     # Validate environment variables at startup
     _validate_environment()
-    
-    # Try to connect to MongoDB with retries
-    max_retries = 3
-    retry_delay = 5
+
+    # Try to connect to Supabase with retries
     db_connected = False
-    
-    for attempt in range(1, max_retries + 1):
-        try:
-            logger.info(f"🔌 MongoDB connection (attempt {attempt}/{max_retries})...")
-            database.test_connection(max_retries=1, retry_delay=1)
-            database.create_indexes()
-            db_connected = True
-            
-            # Log MongoDB info
-            try:
-                client = database.get_client()
-                info = client.server_info()
-                logger.info(f"✓ MongoDB connected (v{info.get('version', 'unknown')})")
-            except Exception:
-                logger.info("✓ MongoDB connected")
-            break
-        except Exception as e:
-            logger.warning(f"⚠️ MongoDB attempt {attempt} failed: {e}")
-            if attempt < max_retries:
-                logger.info(f"   Retrying in {retry_delay}s...")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error("❌ MongoDB connection failed after all retries")
-                logger.error("   The app will start but database operations will fail")
-    
+    try:
+        logger.info("Connecting to Supabase...")
+        database.test_connection(max_retries=3, retry_delay=2)
+        database.create_indexes()
+        db_connected = True
+        logger.info("Supabase connected")
+    except Exception as e:
+        logger.error(f"Supabase connection failed: {e}")
+        logger.error("   The app will start but database operations will fail")
+
     # Test LLM provider (non-blocking)
     llm_ready = False
     try:
         from services.llm_provider import llm
         llm._validate_token()
-        logger.info(f"✓ LLM provider initialized")
-        logger.info(f"   Primary model: {llm.current_model}")
-        logger.info(f"   Fallback models: {len(llm.models) - 1}")
+        logger.info(f"LLM provider initialized: {llm.current_model}")
         llm_ready = True
-        
-        # Optional: Quick test call (can be slow on cold start)
-        # Uncomment to test LLM at startup
-        # try:
-        #     await llm.test_connection()
-        # except Exception as e:
-        #     logger.warning(f"⚠️ LLM test call failed (non-critical): {e}")
-        
     except Exception as e:
-        logger.error(f"❌ LLM provider initialization failed: {e}")
-        logger.error("   AI features will not work until this is fixed")
-    
+        logger.error(f"LLM provider initialization failed: {e}")
+
     # Summary
     port = int(os.environ.get("PORT", 8000))
     logger.info("=" * 60)
     if db_connected and llm_ready:
-        logger.info("✅ All systems operational")
+        logger.info("All systems operational")
     else:
         status = []
         if not db_connected:
             status.append("Database")
         if not llm_ready:
             status.append("LLM")
-        logger.warning(f"⚠️ Starting with issues: {', '.join(status)}")
+        logger.warning(f"Starting with issues: {', '.join(status)}")
     logger.info(f"   Server ready on port {port}")
     logger.info("=" * 60)
-    
+
     yield  # App is running
-    
+
     # Shutdown
     logger.info("Shutting down DueSense Backend API...")
     database.close_connection()
-    logger.info("✓ Shutdown complete")
+    logger.info("Shutdown complete")
 
 
 def _validate_environment():
-    """Validate required environment variables and log warnings."""
-    logger.info("📋 Environment validation:")
-    
-    # Check MongoDB URL
-    mongo_url = os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URL")
-    if not mongo_url:
-        logger.error("❌ MONGODB_URI not set - database will not work")
+    """Enhanced environment validation with helpful error messages."""
+    logger.info("Environment validation:")
+
+    critical_missing = []
+    warnings = []
+
+    # Critical: Database
+    if not os.environ.get("SUPABASE_URL"):
+        critical_missing.append("SUPABASE_URL")
     else:
-        # Mask the URL for logging
-        safe_url = mongo_url[:30] + "..." if len(mongo_url) > 30 else mongo_url
-        logger.info(f"   ✓ MongoDB URL: {safe_url}")
-    
-    # Log DB name
-    db_name = os.environ.get("DB_NAME", "duesense")
-    logger.info(f"   Database name: {db_name}")
-    
-    # Check LLM providers (Z.ai, GROQ, HuggingFace)
-    z_key = os.environ.get("Z_API_KEY")
-    groq_key = os.environ.get("GROQ_API_KEY")
-    hf_key = os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN")
-    
+        logger.info(f"   Supabase URL: {os.environ.get('SUPABASE_URL')[:40]}...")
+
+    if not (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")):
+        critical_missing.append("SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY")
+    else:
+        logger.info("   Supabase credentials configured")
+
+    # Critical: At least one LLM provider
     llm_providers = []
-    if z_key:
-        llm_providers.append(f"Z.ai ({z_key[:8]}...)")
-    if groq_key:
-        llm_providers.append(f"GROQ ({groq_key[:8]}...)")
-    if hf_key:
-        llm_providers.append(f"HuggingFace ({hf_key[:8]}...)")
-    
-    if llm_providers:
-        logger.info(f"   ✓ LLM providers: {', '.join(llm_providers)}")
+    if os.environ.get("Z_API_KEY"):
+        llm_providers.append("Z.ai")
+    if os.environ.get("GROQ_API_KEY"):
+        llm_providers.append("GROQ")
+    if os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN"):
+        llm_providers.append("HuggingFace")
+
+    if not llm_providers:
+        critical_missing.append("At least one LLM API key (Z_API_KEY, GROQ_API_KEY, or HUGGINGFACE_API_KEY)")
     else:
-        logger.error("❌ No LLM API keys set - AI features will not work")
-    
-    # Log file size limit (handle malformed env var)
-    raw_max_size = os.environ.get("MAX_FILE_SIZE_MB", "25")
-    if "=" in str(raw_max_size):
-        raw_max_size = str(raw_max_size).split("=")[-1]
-    logger.info(f"   Max file size: {raw_max_size}MB")
-    
-    # Log optional enrichment keys
-    optional_keys = [
-        ("GITHUB_TOKEN", "GitHub"),
-        ("NEWS_API_KEY", "NewsAPI"),
-        ("SERPAPI_KEY", "SerpAPI"),
-        ("SCRAPER_API_KEY", "ScraperAPI"),
-    ]
-    configured = []
-    for key, name in optional_keys:
-        if os.environ.get(key):
-            configured.append(name)
-    if configured:
-        logger.info(f"   Optional APIs: {', '.join(configured)}")
+        logger.info(f"   LLM providers: {', '.join(llm_providers)}")
+
+    # Warnings: Optional but recommended
+    if not os.environ.get("GITHUB_TOKEN"):
+        warnings.append("GITHUB_TOKEN not set - GitHub analysis disabled")
+    if not os.environ.get("NEWS_API_KEY"):
+        warnings.append("NEWS_API_KEY not set - News enrichment disabled")
+    if not os.environ.get("SERPAPI_KEY"):
+        warnings.append("SERPAPI_KEY not set - Competitor/market research disabled")
+
+    # Security
+    demo_key_enabled = os.environ.get("ENABLE_DEMO_KEY", "true").lower() == "true"
+    if demo_key_enabled:
+        warnings.append("ENABLE_DEMO_KEY=true - Disable in production!")
+
+    if not os.environ.get("DUESENSE_API_KEY"):
+        warnings.append("DUESENSE_API_KEY not set - Using default demo key")
+
+    # Log warnings
+    if warnings:
+        logger.warning("Configuration warnings:")
+        for w in warnings:
+            logger.warning(f"   {w}")
+
+    # Fail fast if critical vars missing
+    if critical_missing:
+        logger.error("CRITICAL: Missing required environment variables:")
+        for var in critical_missing:
+            logger.error(f"   {var}")
+        raise ValueError(
+            f"Missing required environment variables: {', '.join(critical_missing)}\n"
+            "Please check DEPLOYMENT.md for configuration instructions."
+        )
+
+    logger.info("Environment validation passed")
 
 
 # Create FastAPI app with lifespan manager
@@ -226,12 +217,25 @@ All API endpoints are versioned under `/api/v1/`.
     ]
 )
 
+# Request ID middleware for tracing
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+app.add_middleware(RequestIDMiddleware)
+
 # CORS middleware - production configuration
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
-if ALLOWED_ORIGINS == "*":
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "").strip()
+if not ALLOWED_ORIGINS or ALLOWED_ORIGINS == "*":
+    logger.warning("CORS set to allow all origins. Set ALLOWED_ORIGINS in production!")
     origins = ["*"]
 else:
     origins = [o.strip() for o in ALLOWED_ORIGINS.split(",") if o.strip()]
+    logger.info(f"CORS restricted to: {', '.join(origins)}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -246,18 +250,15 @@ app.add_middleware(
 # Global exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Handle uncaught exceptions gracefully."""
     import traceback
     error_detail = str(exc)[:500] if str(exc) else "Unknown error"
     logger.error(f"Unhandled exception on {request.url.path}: {type(exc).__name__}: {error_detail}")
     logger.error(f"Traceback:\n{traceback.format_exc()}")
-    
-    # Return detailed error for debugging (include detail in response)
     return JSONResponse(
         status_code=500,
         content={
             "error": "Internal server error",
-            "detail": error_detail,  # Include actual error for debugging
+            "detail": error_detail,
             "type": type(exc).__name__,
             "path": str(request.url.path)
         }
@@ -291,25 +292,12 @@ def get_memos_col():
     return database.memos_collection()
 
 
-def serialize_doc(doc):
-    """Serialize MongoDB document, converting _id to id string."""
-    if doc is None:
-        return None
-    doc = dict(doc)  # Make a copy to avoid modifying original
-    doc["id"] = str(doc.pop("_id"))
-    return doc
-
-
-def serialize_docs(docs):
-    """Serialize a list of MongoDB documents."""
-    return [serialize_doc(d) for d in docs]
-
-
-def validate_object_id(id_str: str) -> ObjectId:
-    """Validate and return ObjectId, raise HTTPException if invalid."""
+def validate_uuid(id_str: str) -> str:
+    """Validate UUID format, raise HTTPException if invalid."""
     try:
-        return ObjectId(id_str)
-    except (InvalidId, TypeError):
+        uuid.UUID(id_str)
+        return id_str
+    except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail=f"Invalid ID format: {id_str}")
 
 
@@ -318,35 +306,24 @@ STATIC_DIR = Path(__file__).parent / "static"
 FRONTEND_BUILD_EXISTS = (STATIC_DIR / "index.html").exists()
 
 if FRONTEND_BUILD_EXISTS:
-    logger.info("✓ Frontend build found - serving React app at /")
+    logger.info("Frontend build found - serving React app at /")
 else:
-    logger.info("ℹ Frontend build not found - serving landing page at /")
+    logger.info("Frontend build not found - serving landing page at /")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """
-    Serve the React frontend or landing page.
-    
-    If frontend build exists in backend/static/, serve the React app.
-    Otherwise, serve the API landing/documentation page.
-    """
-    # Check if React build exists
     static_index = Path(__file__).parent / "static" / "index.html"
-    
     if static_index.exists():
         with open(static_index, "r") as f:
             return HTMLResponse(content=f.read(), status_code=200)
-    
-    # Fallback to landing page if no React build
+
     template_path = Path(__file__).parent / "templates" / "landing.html"
-    
     try:
         with open(template_path, "r") as f:
             html_content = f.read()
         return HTMLResponse(content=html_content, status_code=200)
     except FileNotFoundError:
-        # Fallback to simple page if template is missing
         return HTMLResponse(
             content="""
             <!DOCTYPE html>
@@ -359,7 +336,7 @@ async def root():
                 </style>
             </head>
             <body>
-                <h1>🚀 DueSense</h1>
+                <h1>DueSense</h1>
                 <p>AI-Powered VC Deal Intelligence</p>
                 <p><a href="/docs">View API Documentation</a></p>
             </body>
@@ -372,65 +349,73 @@ async def root():
 @app.get("/health")
 async def health_check():
     """
-    Health check endpoint for Render and other monitoring systems.
-
-    ALWAYS returns 200 OK to keep the service alive.
-    Reports database and LLM connectivity status in the response body.
+    Comprehensive health check with system diagnostics.
+    ALWAYS returns 200 OK. Reports status in response body.
     """
-    db_connected = False
+    start_time = datetime.now(timezone.utc)
+
+    db_status = "disconnected"
+    db_latency_ms = None
     db_error = None
-    llm_ready = False
-    llm_error = None
-    llm_model = None
-    
-    # Test MongoDB connection
     try:
+        db_start = datetime.now(timezone.utc)
         client = database.get_client()
-        client.admin.command('ping')
-        db_connected = True
+        client.table("companies").select("id").limit(1).execute()
+        db_latency_ms = round((datetime.now(timezone.utc) - db_start).total_seconds() * 1000, 2)
+        db_status = "connected"
     except Exception as e:
-        db_error = str(e)[:100]  # Truncate error message
-    
-    # Test LLM provider readiness
+        db_error = str(e)[:200]
+
+    llm_status = "unavailable"
+    llm_model = None
+    llm_error = None
     try:
         from services.llm_provider import llm
         llm._validate_token()
-        llm_ready = True
+        llm_status = "ready"
         llm_model = f"{llm.current_provider['name']}: {llm.current_model}"
     except Exception as e:
-        llm_error = str(e)[:100]
-    
-    # Determine overall status
-    overall_status = "healthy" if (db_connected and llm_ready) else "degraded"
-    
-    # Always return 200 OK - Render health checks expect this
+        llm_error = str(e)[:200]
+
+    overall_status = "healthy" if (db_status == "connected" and llm_status == "ready") else "degraded"
+    response_time_ms = round((datetime.now(timezone.utc) - start_time).total_seconds() * 1000, 2)
+
     return JSONResponse(
         status_code=200,
         content={
             "status": overall_status,
-            "service": "duesense-backend",
-            "database": "connected" if db_connected else "disconnected",
-            "llm": "ready" if llm_ready else "unavailable",
-            "llm_model": llm_model,
-            "python_version": sys.version.split()[0],
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            **({"db_error": db_error} if db_error else {}),
-            **({"llm_error": llm_error} if llm_error else {}),
+            "service": "duesense-backend",
+            "version": "1.0.0",
+            "database": {
+                "status": db_status,
+                "type": "supabase",
+                "latency_ms": db_latency_ms,
+                **({"error": db_error} if db_error else {}),
+            },
+            "llm": {
+                "status": llm_status,
+                "model": llm_model,
+                **({"error": llm_error} if llm_error else {}),
+            },
+            "system": {
+                "python_version": sys.version.split()[0],
+                "response_time_ms": response_time_ms,
+            },
         }
     )
 
 
 @app.get("/api/health")
 async def api_health():
-    """Simple health check for API consumers."""
     db_ok = False
     try:
         client = database.get_client()
-        client.admin.command('ping')
+        client.table("companies").select("id").limit(1).execute()
         db_ok = True
     except Exception:
         pass
-    
+
     return {
         "status": "ok" if db_ok else "degraded",
         "service": "vc-deal-intelligence",
@@ -442,11 +427,14 @@ async def api_health():
 
 @app.get("/api/companies")
 async def list_companies():
-    companies = list(get_companies_col().find().sort("created_at", -1))
+    companies_tbl = get_companies_col()
+    companies = companies_tbl.find_many(order_by="created_at", order_desc=True)
+    scores_tbl = get_scores_col()
     result = []
     for c in companies:
-        c["id"] = str(c.pop("_id"))
-        score = get_scores_col().find_one({"company_id": c["id"]}, {"_id": 0})
+        score = scores_tbl.find_one({"company_id": c["id"]})
+        if score:
+            score.pop("id", None)
         c["score"] = score
         result.append(c)
     return {"companies": result}
@@ -454,19 +442,23 @@ async def list_companies():
 
 @app.get("/api/companies/{company_id}")
 async def get_company(company_id: str):
-    obj_id = validate_object_id(company_id)
-    company = get_companies_col().find_one({"_id": obj_id})
+    validate_uuid(company_id)
+    companies_tbl = get_companies_col()
+    company = companies_tbl.find_by_id(company_id)
     if not company:
         raise HTTPException(404, "Company not found")
-    company = serialize_doc(company)
 
-    # Get related data
-    decks = serialize_docs(list(get_pitch_decks_col().find({"company_id": company_id})))
-    founders_list = serialize_docs(list(get_founders_col().find({"company_id": company_id})))
-    enrichments = serialize_docs(list(get_enrichment_col().find({"company_id": company_id})))
-    score = get_scores_col().find_one({"company_id": company_id}, {"_id": 0})
-    comps = serialize_docs(list(get_competitors_col().find({"company_id": company_id})))
-    memo = get_memos_col().find_one({"company_id": company_id}, {"_id": 0})
+    cid = company["id"]
+    decks = get_pitch_decks_col().find_many({"company_id": cid})
+    founders_list = get_founders_col().find_many({"company_id": cid})
+    enrichments = get_enrichment_col().find_many({"company_id": cid})
+    score = get_scores_col().find_one({"company_id": cid})
+    if score:
+        score.pop("id", None)
+    comps = get_competitors_col().find_many({"company_id": cid})
+    memo = get_memos_col().find_one({"company_id": cid})
+    if memo:
+        memo.pop("id", None)
 
     return {
         "company": company,
@@ -481,14 +473,15 @@ async def get_company(company_id: str):
 
 @app.delete("/api/companies/{company_id}")
 async def delete_company(company_id: str):
-    obj_id = validate_object_id(company_id)
-    get_companies_col().delete_one({"_id": obj_id})
-    get_pitch_decks_col().delete_many({"company_id": company_id})
-    get_founders_col().delete_many({"company_id": company_id})
-    get_enrichment_col().delete_many({"company_id": company_id})
-    get_scores_col().delete_many({"company_id": company_id})
-    get_competitors_col().delete_many({"company_id": company_id})
-    get_memos_col().delete_many({"company_id": company_id})
+    validate_uuid(company_id)
+    # CASCADE handles related records via FK constraints, but let's be explicit
+    get_pitch_decks_col().delete({"company_id": company_id})
+    get_founders_col().delete({"company_id": company_id})
+    get_enrichment_col().delete({"company_id": company_id})
+    get_scores_col().delete({"company_id": company_id})
+    get_competitors_col().delete({"company_id": company_id})
+    get_memos_col().delete({"company_id": company_id})
+    get_companies_col().delete({"id": company_id})
     return {"status": "deleted"}
 
 
@@ -500,20 +493,12 @@ async def upload_deck(
     file: UploadFile = File(...),
     company_website: Optional[str] = Form(None),
 ):
-    """
-    Upload a pitch deck for analysis.
-    
-    Accepts PDF and PPTX files up to MAX_FILE_SIZE_MB (default 25MB).
-    Processing happens in the background - use /api/decks/{id}/status to check progress.
-    """
-    # CRITICAL: Wrap entire function in try-except to never crash without returning JSON
     try:
-        logger.info(f"📤 Upload request: {file.filename} ({file.size} bytes)")
-        
+        logger.info(f"Upload request: {file.filename} ({file.size} bytes)")
+
         # Validate file extension
         file_ext = file.filename.split(".")[-1].lower()
         if file_ext not in ["pdf", "pptx", "ppt"]:
-            logger.warning(f"❌ Rejected file type: {file_ext}")
             raise HTTPException(400, f"Only PDF and PPTX files are supported. Got: .{file_ext}")
 
         # Validate website URL if provided
@@ -521,90 +506,62 @@ async def upload_deck(
             company_website = company_website.strip()
             if company_website and not company_website.startswith("http"):
                 company_website = "https://" + company_website
-            logger.info(f"  Website provided: {company_website}")
 
         # Read and validate file content
-        try:
-            content = await file.read()
-            file_size = len(content)
-            logger.info(f"✓ File read: {file_size:,} bytes")
-        except Exception as e:
-            logger.error(f"❌ Failed to read uploaded file: {e}")
-            raise HTTPException(500, f"Failed to read uploaded file: {e}")
-        
+        content = await file.read()
+        file_size = len(content)
+
         # Validate file size
         def get_max_file_size_mb():
-            """Get max file size from env, handling malformed values."""
             raw = os.environ.get("MAX_FILE_SIZE_MB", "25")
-            # Handle case where value might be "MAX_FILE_SIZE_MB=25" instead of "25"
             if "=" in str(raw):
                 raw = str(raw).split("=")[-1]
             try:
                 return int(raw)
             except (ValueError, TypeError):
-                return 25  # Default fallback
-        
+                return 25
+
         max_mb = get_max_file_size_mb()
         max_size = max_mb * 1024 * 1024
         if file_size > max_size:
-            logger.warning(f"❌ File too large: {file_size:,} bytes (max: {max_size:,})")
-            raise HTTPException(400, f"File exceeds {max_mb}MB limit. Your file is {file_size / 1024 / 1024:.1f}MB")
-        
-        if file_size < 1000:  # Less than 1KB is suspicious
-            logger.warning(f"❌ File too small: {file_size} bytes")
+            raise HTTPException(400, f"File exceeds {max_mb}MB limit.")
+        if file_size < 1000:
             raise HTTPException(400, "File appears to be empty or corrupted (less than 1KB)")
 
         # Create company placeholder
-        try:
-            company_id = str(get_companies_col().insert_one({
-                "name": "Processing...",
-                "status": "processing",
-                "stage": None,
-                "website": company_website,
-                "tagline": None,
-                "founded_year": None,
-                "hq_location": None,
-                "website_source": "user_provided" if company_website else None,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).inserted_id)
-            logger.info(f"✓ Company record created: {company_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to create company record: {e}")
-            raise HTTPException(500, f"Database error: Could not create company record")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        company_row = get_companies_col().insert({
+            "name": "Processing...",
+            "status": "processing",
+            "website": company_website,
+            "website_source": "user_provided" if company_website else None,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        })
+        company_id = company_row["id"]
+        logger.info(f"Company record created: {company_id}")
 
         # Save file locally
         file_path = f"/tmp/decks/{uuid.uuid4()}.{file_ext}"
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            with open(file_path, "wb") as f:
-                f.write(content)
-            logger.info(f"✓ File saved: {file_path}")
-        except Exception as e:
-            logger.error(f"❌ Failed to save file: {e}")
-            raise HTTPException(500, f"Failed to save uploaded file: {e}")
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(content)
 
         # Create deck record
-        try:
-            deck_id = str(get_pitch_decks_col().insert_one({
-                "company_id": company_id,
-                "file_path": file_path,
-                "file_name": file.filename,
-                "file_size": file_size,
-                "website_source": company_website,
-                "processing_status": "uploading",
-                "extracted_data": None,
-                "error_message": None,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }).inserted_id)
-            logger.info(f"✓ Deck record created: {deck_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to create deck record: {e}")
-            raise HTTPException(500, f"Database error: Could not create deck record")
+        deck_row = get_pitch_decks_col().insert({
+            "company_id": company_id,
+            "file_path": file_path,
+            "file_name": file.filename,
+            "file_size": file_size,
+            "website_source": company_website,
+            "processing_status": "uploading",
+            "created_at": now_iso,
+        })
+        deck_id = deck_row["id"]
+        logger.info(f"Deck record created: {deck_id}")
 
         # Process in background
         background_tasks.add_task(process_deck_pipeline, deck_id, company_id, file_path, file_ext, company_website)
-        logger.info(f"🚀 Background processing started for deck {deck_id}")
 
         return {
             "deck_id": deck_id,
@@ -613,133 +570,83 @@ async def upload_deck(
             "website_provided": bool(company_website),
             "message": "Deck uploaded successfully. Analysis in progress." + (" Website due diligence will run in parallel." if company_website else ""),
         }
-    
+
     except HTTPException:
-        # Re-raise HTTP exceptions as-is (they have proper status codes)
         raise
     except Exception as e:
-        # Catch ALL other errors - never let the function crash without returning JSON
         import traceback
-        logger.error(f"❌ Upload failed with unexpected error: {type(e).__name__}: {str(e)}")
+        logger.error(f"Upload failed: {type(e).__name__}: {str(e)}")
         logger.error(f"Traceback:\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Upload failed: {str(e)[:200]}"  # Truncate error for safety
-        )
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)[:200]}")
 
 
 async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, file_ext: str, company_website: str = None):
-    """
-    Full processing pipeline: extract → enrich → score → memo
-    
-    This runs in the background after upload.
-    Website due diligence runs in parallel with deck extraction if URL provided.
-    """
-    import asyncio
-    
-    logger.info(f"=" * 60)
-    logger.info(f"🔄 Starting pipeline for deck {deck_id}, company {company_id}")
-    logger.info(f"   File: {file_path}, Website: {company_website or 'None'}")
-    logger.info(f"=" * 60)
-    
-    deck_obj_id = validate_object_id(deck_id)
-    company_obj_id = validate_object_id(company_id)
-    
+    """Full processing pipeline: extract -> enrich -> score -> memo"""
+    logger.info(f"Starting pipeline for deck {deck_id}, company {company_id}")
+
+    pitch_decks_tbl = get_pitch_decks_col()
+    companies_tbl = get_companies_col()
+
     try:
-        # Step 1: Extract deck + optional website DD in parallel
-        logger.info(f"📋 Step 1/4: Extracting deck content...")
-        get_pitch_decks_col().update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "extracting"}}
-        )
-        get_companies_col().update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "extracting"}}
-        )
+        # Step 1: Extract
+        logger.info("Step 1/4: Extracting deck content...")
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "extracting"})
+        companies_tbl.update({"id": company_id}, {"status": "extracting"})
 
         from services.deck_processor import extract_deck
 
-        # Run deck extraction and website due diligence in parallel
         tasks = [extract_deck(file_path, file_ext)]
         if company_website:
-            logger.info(f"   Also running website due diligence for: {company_website}")
             from services.website_due_diligence import run_website_due_diligence
             tasks.append(run_website_due_diligence(company_id, company_website))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Handle deck extraction result
         extracted = {}
         if isinstance(results[0], Exception):
-            error_msg = f"Deck extraction failed: {type(results[0]).__name__}: {results[0]}"
-            logger.error(f"❌ {error_msg}")
-            raise RuntimeError(error_msg)
+            raise RuntimeError(f"Deck extraction failed: {results[0]}")
         else:
             extracted = results[0]
-            logger.info(f"✓ Deck extracted successfully")
 
-        # Handle website DD result - ensure failures are persisted cleanly
-        website_dd_result = None
+        # Handle website DD result
         if company_website and len(results) > 1:
             if isinstance(results[1], Exception):
-                logger.warning(f"⚠️ Website DD failed: {results[1]}")
-                # Persist website DD failure in enrichment_sources
-                try:
-                    get_enrichment_col().insert_one({
-                        "company_id": company_id,
-                        "source_type": "website_due_diligence",
-                        "source_url": company_website,
-                        "data": {
-                            "status": "failed",
-                            "error": str(results[1]),
-                            "website_url": company_website,
-                        },
-                        "citations": [],
-                        "fetched_at": datetime.now(timezone.utc).isoformat(),
-                        "is_valid": False,
-                    })
-                except Exception as persist_err:
-                    logger.error(f"Failed to persist website DD error: {persist_err}")
-            else:
-                logger.info(f"✓ Website DD completed")
-            website_dd_result = results[1] if not isinstance(results[1], Exception) else {"error": str(results[1])}
+                logger.warning(f"Website DD failed: {results[1]}")
+                get_enrichment_col().insert({
+                    "company_id": company_id,
+                    "source_type": "website_due_diligence",
+                    "source_url": company_website,
+                    "data": {"status": "failed", "error": str(results[1]), "website_url": company_website},
+                    "citations": [],
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "is_valid": False,
+                })
 
-        get_pitch_decks_col().update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"extracted_data": extracted, "processing_status": "extracted"}}
-        )
+        pitch_decks_tbl.update({"id": deck_id}, {"extracted_data": extracted, "processing_status": "extracted"})
 
         # Update company with extracted data
-        # User-provided website takes priority over deck-extracted website
         company_data = extracted.get("company", {})
         company_name = company_data.get("name", "Unknown Company")
         final_website = company_website or company_data.get("website")
-        logger.info(f"✓ Company identified: {company_name}")
-        
-        get_companies_col().update_one(
-            {"_id": company_obj_id},
-            {"$set": {
-                "name": company_name,
-                "tagline": company_data.get("tagline"),
-                "website": final_website,
-                "stage": company_data.get("stage"),
-                "founded_year": company_data.get("founded"),
-                "hq_location": company_data.get("hq_location"),
-                "status": "enriching",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }}
-        )
 
-        # Inject user-provided website into extracted data for downstream enrichment
+        companies_tbl.update({"id": company_id}, {
+            "name": company_name,
+            "tagline": company_data.get("tagline"),
+            "website": final_website,
+            "stage": company_data.get("stage"),
+            "founded_year": company_data.get("founded"),
+            "hq_location": company_data.get("hq_location"),
+            "status": "enriching",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
         if company_website and "company" in extracted:
             extracted["company"]["website"] = company_website
 
         # Save founders
         founders = extracted.get("founders", [])
-        if founders:
-            logger.info(f"   Saving {len(founders)} founders...")
         for f in founders:
-            get_founders_col().insert_one({
+            get_founders_col().insert({
                 "company_id": company_id,
                 "name": f.get("name", "Unknown"),
                 "role": f.get("role"),
@@ -751,99 +658,58 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             })
 
         # Step 2: Enrich
-        logger.info(f"🔍 Step 2/4: Running enrichment...")
-        get_pitch_decks_col().update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "enriching"}}
-        )
+        logger.info("Step 2/4: Running enrichment...")
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "enriching"})
 
         enrichment_data = {}
         try:
             from services.enrichment_engine import enrich_company
             enrichment_data = await enrich_company(company_id, extracted)
-            logger.info(f"✓ Enrichment completed")
         except Exception as enrich_err:
-            logger.error(f"⚠️ Enrichment failed: {type(enrich_err).__name__}: {enrich_err}")
+            logger.error(f"Enrichment failed: {type(enrich_err).__name__}: {enrich_err}")
             enrichment_data = {"error": str(enrich_err)}
 
-        get_companies_col().update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "scoring"}}
-        )
+        companies_tbl.update({"id": company_id}, {"status": "scoring"})
 
         # Step 3: Score
-        logger.info(f"📊 Step 3/4: Calculating investment score...")
-        get_pitch_decks_col().update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "scoring"}}
-        )
+        logger.info("Step 3/4: Calculating investment score...")
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "scoring"})
 
         score_data = {}
         try:
             from services.scorer import calculate_investment_score
             score_data = await calculate_investment_score(company_id, extracted, enrichment_data)
-            tier = score_data.get("tier", "Unknown")
-            total = score_data.get("total_score", 0)
-            logger.info(f"✓ Score calculated: {total}/100 ({tier})")
         except Exception as score_err:
-            logger.error(f"⚠️ Scoring failed: {type(score_err).__name__}: {score_err}")
+            logger.error(f"Scoring failed: {type(score_err).__name__}: {score_err}")
             score_data = {"error": str(score_err)}
 
-        get_companies_col().update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "generating_memo"}}
-        )
+        companies_tbl.update({"id": company_id}, {"status": "generating_memo"})
 
         # Step 4: Generate Memo
-        logger.info(f"📝 Step 4/4: Generating investment memo...")
-        get_pitch_decks_col().update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "generating_memo"}}
-        )
+        logger.info("Step 4/4: Generating investment memo...")
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "generating_memo"})
 
         try:
             from services.memo_generator import generate_memo
-            memo_data = await generate_memo(company_id, extracted, enrichment_data, score_data)
-            logger.info(f"✓ Memo generated")
+            await generate_memo(company_id, extracted, enrichment_data, score_data)
         except Exception as memo_err:
-            logger.error(f"⚠️ Memo generation failed: {type(memo_err).__name__}: {memo_err}")
+            logger.error(f"Memo generation failed: {type(memo_err).__name__}: {memo_err}")
 
         # Final status
-        get_pitch_decks_col().update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "completed"}}
-        )
-        get_companies_col().update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}}
-        )
-        
-        logger.info(f"=" * 60)
-        logger.info(f"✅ Pipeline COMPLETED for {company_name}")
-        logger.info(f"   Deck ID: {deck_id}")
-        logger.info(f"   Company ID: {company_id}")
-        logger.info(f"=" * 60)
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "completed"})
+        companies_tbl.update({"id": company_id}, {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()})
+
+        logger.info(f"Pipeline COMPLETED for {company_name}")
 
     except Exception as e:
-        # Log full error with traceback for debugging
         import traceback
         error_msg = str(e)
-        logger.error(f"=" * 60)
-        logger.error(f"❌ Pipeline FAILED for deck {deck_id}, company {company_id}")
-        logger.error(f"   Error: {type(e).__name__}: {error_msg}")
-        logger.error(f"   Traceback:\n{traceback.format_exc()}")
-        logger.error(f"=" * 60)
-        
-        get_pitch_decks_col().update_one(
-            {"_id": deck_obj_id},
-            {"$set": {"processing_status": "failed", "error_message": error_msg[:500]}}
-        )
-        get_companies_col().update_one(
-            {"_id": company_obj_id},
-            {"$set": {"status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()}}
-        )
+        logger.error(f"Pipeline FAILED for deck {deck_id}: {error_msg}")
+        logger.error(traceback.format_exc())
+
+        pitch_decks_tbl.update({"id": deck_id}, {"processing_status": "failed", "error_message": error_msg[:500]})
+        companies_tbl.update({"id": company_id}, {"status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()})
     finally:
-        # Cleanup temporary file
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
@@ -855,10 +721,11 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
 
 @app.get("/api/decks/{deck_id}/status")
 async def get_deck_status(deck_id: str):
-    obj_id = validate_object_id(deck_id)
-    deck = get_pitch_decks_col().find_one({"_id": obj_id}, {"_id": 0})
+    validate_uuid(deck_id)
+    deck = get_pitch_decks_col().find_by_id(deck_id)
     if not deck:
         raise HTTPException(404, "Deck not found")
+    deck.pop("id", None)
     return deck
 
 
@@ -866,8 +733,8 @@ async def get_deck_status(deck_id: str):
 
 @app.post("/api/companies/{company_id}/enrich")
 async def trigger_enrichment(company_id: str, background_tasks: BackgroundTasks):
-    obj_id = validate_object_id(company_id)
-    company = get_companies_col().find_one({"_id": obj_id})
+    validate_uuid(company_id)
+    company = get_companies_col().find_by_id(company_id)
     if not company:
         raise HTTPException(404, "Company not found")
 
@@ -891,8 +758,7 @@ async def run_enrichment(company_id, extracted):
 @app.get("/api/companies/{company_id}/website-intelligence")
 async def get_website_intelligence(company_id: str):
     wi = get_enrichment_col().find_one(
-        {"company_id": company_id, "source_type": "website_intelligence"},
-        {"_id": 0}
+        {"company_id": company_id, "source_type": "website_intelligence"}
     )
     if not wi:
         raise HTTPException(404, "Website intelligence not found")
@@ -901,8 +767,8 @@ async def get_website_intelligence(company_id: str):
 
 @app.post("/api/companies/{company_id}/website-intelligence/rerun")
 async def rerun_website_intelligence(company_id: str, background_tasks: BackgroundTasks):
-    obj_id = validate_object_id(company_id)
-    company = get_companies_col().find_one({"_id": obj_id})
+    validate_uuid(company_id)
+    company = get_companies_col().find_by_id(company_id)
     if not company:
         raise HTTPException(404, "Company not found")
     website = company.get("website")
@@ -924,9 +790,10 @@ async def _run_website_intel(company_id, website):
 
 @app.get("/api/companies/{company_id}/score")
 async def get_score(company_id: str):
-    score = get_scores_col().find_one({"company_id": company_id}, {"_id": 0})
+    score = get_scores_col().find_one({"company_id": company_id})
     if not score:
         raise HTTPException(404, "Score not found")
+    score.pop("id", None)
     return score
 
 
@@ -934,9 +801,10 @@ async def get_score(company_id: str):
 
 @app.get("/api/companies/{company_id}/memo")
 async def get_memo(company_id: str):
-    memo = get_memos_col().find_one({"company_id": company_id}, {"_id": 0})
+    memo = get_memos_col().find_one({"company_id": company_id})
     if not memo:
         raise HTTPException(404, "Memo not found")
+    memo.pop("id", None)
     return memo
 
 
@@ -944,23 +812,23 @@ async def get_memo(company_id: str):
 
 @app.get("/api/dashboard/stats")
 async def dashboard_stats():
-    total = get_companies_col().count_documents({})
-    processing = get_companies_col().count_documents({"status": {"$in": ["processing", "extracting", "enriching", "scoring", "generating_memo"]}})
-    completed = get_companies_col().count_documents({"status": "completed"})
-    failed = get_companies_col().count_documents({"status": "failed"})
+    companies_tbl = get_companies_col()
+    scores_tbl = get_scores_col()
 
-    # Get tier distribution
-    tier_1 = get_scores_col().count_documents({"tier": "TIER_1"})
-    tier_2 = get_scores_col().count_documents({"tier": "TIER_2"})
-    tier_3 = get_scores_col().count_documents({"tier": "TIER_3"})
-    tier_pass = get_scores_col().count_documents({"tier": "PASS"})
+    total = companies_tbl.count()
+    processing = companies_tbl.count({"status": {"$in": ["processing", "extracting", "enriching", "scoring", "generating_memo"]}})
+    completed = companies_tbl.count({"status": "completed"})
+    failed = companies_tbl.count({"status": "failed"})
 
-    # Recent companies
-    recent = list(get_companies_col().find({"status": "completed"}).sort("created_at", -1).limit(5))
+    tier_1 = scores_tbl.count({"tier": "TIER_1"})
+    tier_2 = scores_tbl.count({"tier": "TIER_2"})
+    tier_3 = scores_tbl.count({"tier": "TIER_3"})
+    tier_pass = scores_tbl.count({"tier": "PASS"})
+
+    recent = companies_tbl.find_many({"status": "completed"}, order_by="created_at", order_desc=True, limit=5)
     recent_list = []
     for r in recent:
-        r["id"] = str(r.pop("_id"))
-        score = get_scores_col().find_one({"company_id": r["id"]}, {"_id": 0})
+        score = scores_tbl.find_one({"company_id": r["id"]})
         r["score"] = score
         recent_list.append(r)
 
@@ -976,14 +844,11 @@ async def dashboard_stats():
 
 # ============ STATIC FILES & CLIENT-SIDE ROUTING ============
 
-# Serve static files (JS, CSS, images) from frontend build
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.exists() and (_static_dir / "static").exists():
-    # Mount the /static/js, /static/css, etc. from React build
     app.mount("/static", StaticFiles(directory=_static_dir / "static"), name="static-assets")
-    logger.info("✓ Mounted static assets from /static")
+    logger.info("Mounted static assets from /static")
 
-# Serve favicon and other root-level static files
 if _static_dir.exists():
     for static_file in ["favicon.ico", "manifest.json", "robots.txt", "logo192.png", "logo512.png"]:
         file_path = _static_dir / static_file
@@ -993,25 +858,14 @@ if _static_dir.exists():
                 return FileResponse(file_path)
 
 
-# Catch-all route for client-side routing (React Router)
-# This must be defined AFTER all other routes
 @app.get("/{full_path:path}", response_class=HTMLResponse)
 async def serve_spa(full_path: str):
-    """
-    Catch-all route for React Router client-side routing.
-    
-    Returns the React index.html for all non-API routes,
-    allowing React Router to handle the routing.
-    """
-    # Don't catch API routes
     if full_path.startswith("api/") or full_path in ["docs", "redoc", "openapi.json", "health"]:
         raise HTTPException(status_code=404, detail="Not found")
-    
-    # Serve React app if build exists
+
     static_index = Path(__file__).parent / "static" / "index.html"
     if static_index.exists():
         with open(static_index, "r") as f:
             return HTMLResponse(content=f.read(), status_code=200)
-    
-    # Otherwise return 404
+
     raise HTTPException(status_code=404, detail="Not found")

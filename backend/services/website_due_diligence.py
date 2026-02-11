@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_enrichment_col():
-    """Get enrichment sources collection (lazy)."""
+    """Get enrichment sources table (lazy)."""
     return database.enrichment_collection()
 
 CORE_PAGES = [
@@ -35,7 +35,7 @@ async def run_website_due_diligence(company_id: str, website_url: str) -> dict:
     Full website due diligence pipeline.
     Crawls core pages, extracts structured intelligence with citations,
     and stores everything as a `website_due_diligence` enrichment record.
-    Gracefully handles failures — never fails the upload.
+    Gracefully handles failures -- never fails the upload.
     """
     website_url = website_url.rstrip("/")
     if not website_url.startswith("http"):
@@ -65,13 +65,13 @@ async def run_website_due_diligence(company_id: str, website_url: str) -> dict:
                 })
 
     if not crawl_results:
-        # Website unreachable — store incomplete record, don't fail
+        # Website unreachable -- store incomplete record, don't fail
         incomplete = {
             "status": "incomplete",
             "reason": "Website unreachable or blocked",
             "website_url": website_url,
         }
-        get_enrichment_col().insert_one({
+        get_enrichment_col().insert({
             "company_id": company_id,
             "source_type": "website_due_diligence",
             "source_url": website_url,
@@ -95,7 +95,7 @@ async def run_website_due_diligence(company_id: str, website_url: str) -> dict:
         "crawl_timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    get_enrichment_col().insert_one({
+    get_enrichment_col().insert({
         "company_id": company_id,
         "source_type": "website_due_diligence",
         "source_url": website_url,

@@ -1,237 +1,205 @@
 """
-Centralized MongoDB connection management.
+Centralized Supabase database connection management.
 
-This module provides lazy initialization of MongoDB connections to ensure:
-1. The app can boot even if MongoDB is temporarily unavailable
-2. Connection pooling is properly managed
-3. All services use the same connection pool
-4. Environment variable validation happens at connection time, not import time
+This module provides lazy initialization of Supabase connections.
+It exposes collection-like accessor functions that return the Supabase
+client scoped to a specific table, maintaining the same interface pattern
+that the rest of the codebase expects.
 """
 import os
 import logging
-import certifi
 from typing import Optional
-from pymongo import MongoClient
-from pymongo.database import Database
-from pymongo.collection import Collection
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError, ConfigurationError
+from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
 
 # Global connection state - lazy initialized
-_client: Optional[MongoClient] = None
-_db: Optional[Database] = None
+_client: Optional[Client] = None
 _connection_tested: bool = False
 
 
-def get_mongo_uri() -> str:
-    """Get MongoDB URI from environment variables with validation."""
-    uri = os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URL")
-    if not uri:
-        raise ValueError(
-            "MongoDB connection string not configured. "
-            "Set MONGODB_URI or MONGO_URL environment variable."
-        )
-    if not (uri.startswith("mongodb+srv://") or uri.startswith("mongodb://")):
-        raise ValueError(
-            "Invalid MongoDB URI format. "
-            "Must start with 'mongodb://' or 'mongodb+srv://'"
-        )
-    return uri
+def get_supabase_url() -> str:
+    url = os.environ.get("SUPABASE_URL")
+    if not url:
+        raise ValueError("SUPABASE_URL environment variable not set.")
+    return url
 
 
-def get_db_name() -> str:
-    """Get database name from environment or URI."""
-    return os.environ.get("DB_NAME", "duesense")
+def get_supabase_key() -> str:
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    if not key:
+        raise ValueError("SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY not set.")
+    return key
 
 
-def _clean_uri(uri: str) -> str:
-    """Clean and rebuild MongoDB URI with essential parameters only."""
-    if "?" in uri:
-        base_uri = uri.split("?", 1)[0]
-    else:
-        base_uri = uri
-    return f"{base_uri}?retryWrites=true&w=majority"
-
-
-def get_client() -> MongoClient:
-    """
-    Get or create the MongoDB client (lazy initialization).
-    
-    The client is created on first access, not at module import time.
-    This allows the app to start even if MongoDB is temporarily unavailable.
-    """
+def get_client() -> Client:
+    """Get or create the Supabase client (lazy initialization)."""
     global _client
-    
     if _client is None:
-        uri = get_mongo_uri()
-        clean_uri = _clean_uri(uri)
-        
-        # Log connection attempt (mask credentials)
-        safe_uri = clean_uri[:40] + "..." if len(clean_uri) > 40 else clean_uri
-        logger.info(f"Creating MongoDB client: {safe_uri}")
-        
-        _client = MongoClient(
-            clean_uri,
-            tls=True,
-            tlsAllowInvalidCertificates=False,
-            tlsCAFile=certifi.where(),
-            serverSelectionTimeoutMS=30000,
-            connectTimeoutMS=20000,
-            socketTimeoutMS=30000,
-            maxPoolSize=50,
-            minPoolSize=5,
-            retryWrites=True,
-            retryReads=True,
-        )
-        logger.info("MongoDB client created (connection not yet tested)")
-    
+        url = get_supabase_url()
+        key = get_supabase_key()
+        logger.info(f"Creating Supabase client: {url[:40]}...")
+        _client = create_client(url, key)
+        logger.info("Supabase client created")
     return _client
 
 
-def get_database() -> Database:
-    """Get the MongoDB database instance."""
-    global _db
-    
-    if _db is None:
-        client = get_client()
-        db_name = get_db_name()
-        _db = client[db_name]
-        logger.info(f"Using database: {db_name}")
-    
-    return _db
-
-
-def get_collection(name: str) -> Collection:
-    """Get a collection from the database."""
-    return get_database()[name]
-
-
 def test_connection(max_retries: int = 3, retry_delay: float = 2.0) -> bool:
-    """
-    Test the MongoDB connection with retries.
-    
-    Returns True if connection is successful, raises exception otherwise.
-    """
-    import asyncio
+    """Test the Supabase connection with retries."""
+    import time
     global _connection_tested
-    
+
     client = get_client()
-    
     for attempt in range(1, max_retries + 1):
         try:
-            logger.info(f"Testing MongoDB connection (attempt {attempt}/{max_retries})...")
-            result = client.admin.command("ping")
-            logger.info(f"✓ MongoDB connection successful! Ping: {result}")
-            
-            # Get server info for logging
-            try:
-                server_info = client.server_info()
-                logger.info(f"✓ MongoDB version: {server_info.get('version', 'unknown')}")
-            except Exception:
-                pass  # Server info is optional
-            
+            logger.info(f"Testing Supabase connection (attempt {attempt}/{max_retries})...")
+            result = client.table("companies").select("id").limit(1).execute()
+            logger.info("Supabase connection successful!")
             _connection_tested = True
             return True
-            
-        except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-            logger.warning(f"MongoDB connection attempt {attempt} failed: {e}")
-            if attempt < max_retries:
-                import time
-                time.sleep(retry_delay)
-            else:
-                raise
         except Exception as e:
-            logger.error(f"Unexpected error testing MongoDB connection: {e}")
+            logger.warning(f"Supabase connection attempt {attempt} failed: {e}")
             if attempt < max_retries:
-                import time
                 time.sleep(retry_delay)
             else:
                 raise
-    
     return False
 
 
 def is_connected() -> bool:
-    """Check if MongoDB connection has been tested successfully."""
     return _connection_tested
 
 
 def close_connection():
-    """Close the MongoDB connection."""
-    global _client, _db, _connection_tested
-    
-    if _client is not None:
-        try:
-            _client.close()
-            logger.info("✓ MongoDB connection closed")
-        except Exception as e:
-            logger.error(f"Error closing MongoDB connection: {e}")
-        finally:
-            _client = None
-            _db = None
-            _connection_tested = False
+    global _client, _connection_tested
+    _client = None
+    _connection_tested = False
+    logger.info("Supabase connection reference cleared")
 
 
 def create_indexes():
-    """Create database indexes (called during startup)."""
-    try:
-        db = get_database()
-        
-        # Companies collection
-        db["companies"].create_index("name")
-        db["companies"].create_index("created_at")
-        
-        # Pitch decks
-        db["pitch_decks"].create_index("company_id")
-        
-        # Founders
-        db["founders"].create_index("company_id")
-        
-        # Enrichment sources
-        db["enrichment_sources"].create_index("company_id")
-        db["enrichment_sources"].create_index([("company_id", 1), ("source_type", 1)])
-        
-        # Investment scores
-        db["investment_scores"].create_index("company_id", unique=True)
-        
-        # Investment memos
-        db["investment_memos"].create_index("company_id", unique=True)
-        
-        # Competitors
-        db["competitors"].create_index("company_id")
-        
-        logger.info("✓ Database indexes created successfully")
-        
-    except Exception as e:
-        # Don't fail startup if indexes already exist or there's a transient issue
-        logger.warning(f"Index creation note: {e}")
+    """No-op for Supabase (indexes created in SQL schema)."""
+    logger.info("Database indexes managed via Supabase SQL schema")
 
 
-# Collection accessor functions for convenience
-def companies_collection() -> Collection:
-    return get_collection("companies")
+# ---------------------------------------------------------------------------
+# Table accessor helpers – each returns a SupabaseTable wrapper
+# ---------------------------------------------------------------------------
+
+class SupabaseTable:
+    """
+    Thin wrapper around a Supabase table that provides convenience methods.
+    This is NOT a MongoDB Collection – callers must use Supabase query patterns.
+    """
+
+    def __init__(self, table_name: str):
+        self.table_name = table_name
+
+    @property
+    def _table(self):
+        return get_client().table(self.table_name)
+
+    # -- Insert --
+    def insert(self, data: dict) -> dict:
+        """Insert a row and return the inserted row (with id)."""
+        result = self._table.insert(data).execute()
+        return result.data[0] if result.data else {}
+
+    # -- Select helpers --
+    def find_by_id(self, row_id: str) -> Optional[dict]:
+        result = self._table.select("*").eq("id", row_id).limit(1).execute()
+        return result.data[0] if result.data else None
+
+    def find_one(self, filters: dict, exclude_fields: list = None) -> Optional[dict]:
+        q = self._table.select("*")
+        for k, v in filters.items():
+            q = q.eq(k, v)
+        result = q.limit(1).execute()
+        if not result.data:
+            return None
+        row = result.data[0]
+        if exclude_fields:
+            for f in exclude_fields:
+                row.pop(f, None)
+        return row
+
+    def find_many(self, filters: dict = None, order_by: str = None, 
+                  order_desc: bool = True, limit: int = None, 
+                  offset: int = None) -> list:
+        q = self._table.select("*")
+        if filters:
+            for k, v in filters.items():
+                if isinstance(v, dict) and "$in" in v:
+                    q = q.in_(k, v["$in"])
+                else:
+                    q = q.eq(k, v)
+        if order_by:
+            q = q.order(order_by, desc=order_desc)
+        if offset is not None:
+            q = q.offset(offset)
+        if limit is not None:
+            q = q.limit(limit)
+        result = q.execute()
+        return result.data or []
+
+    # -- Update --
+    def update(self, filters: dict, data: dict) -> list:
+        q = self._table.update(data)
+        for k, v in filters.items():
+            q = q.eq(k, v)
+        result = q.execute()
+        return result.data or []
+
+    def upsert(self, data: dict, conflict_column: str = "company_id") -> dict:
+        """Upsert a row based on conflict column."""
+        result = self._table.upsert(data, on_conflict=conflict_column).execute()
+        return result.data[0] if result.data else {}
+
+    # -- Delete --
+    def delete(self, filters: dict) -> int:
+        q = self._table.delete()
+        for k, v in filters.items():
+            q = q.eq(k, v)
+        result = q.execute()
+        return len(result.data) if result.data else 0
+
+    # -- Count --
+    def count(self, filters: dict = None) -> int:
+        q = self._table.select("id", count="exact")
+        if filters:
+            for k, v in filters.items():
+                if isinstance(v, dict) and "$in" in v:
+                    q = q.in_(k, v["$in"])
+                else:
+                    q = q.eq(k, v)
+        result = q.execute()
+        return result.count if result.count is not None else 0
 
 
-def pitch_decks_collection() -> Collection:
-    return get_collection("pitch_decks")
+# Collection accessor functions – maintain same names for minimal diff
+def companies_collection() -> SupabaseTable:
+    return SupabaseTable("companies")
 
 
-def founders_collection() -> Collection:
-    return get_collection("founders")
+def pitch_decks_collection() -> SupabaseTable:
+    return SupabaseTable("pitch_decks")
 
 
-def enrichment_collection() -> Collection:
-    return get_collection("enrichment_sources")
+def founders_collection() -> SupabaseTable:
+    return SupabaseTable("founders")
 
 
-def competitors_collection() -> Collection:
-    return get_collection("competitors")
+def enrichment_collection() -> SupabaseTable:
+    return SupabaseTable("enrichment_sources")
 
 
-def scores_collection() -> Collection:
-    return get_collection("investment_scores")
+def competitors_collection() -> SupabaseTable:
+    return SupabaseTable("competitors")
 
 
-def memos_collection() -> Collection:
-    return get_collection("investment_memos")
+def scores_collection() -> SupabaseTable:
+    return SupabaseTable("investment_scores")
+
+
+def memos_collection() -> SupabaseTable:
+    return SupabaseTable("investment_memos")
