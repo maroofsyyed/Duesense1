@@ -1,6 +1,6 @@
 # DueSense Backend Dockerfile
-# Production-ready Python 3.11.9 with MongoDB Atlas SSL support
-# Uses Bullseye for OpenSSL 1.1.1 compatibility with MongoDB Atlas
+# Production-ready Python 3.11.9 with Supabase (PostgreSQL) support
+# Uses Bullseye for OpenSSL compatibility
 
 FROM python:3.11.9-bullseye
 
@@ -24,7 +24,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
-# Verify OpenSSL version (should show 1.1.1.x for MongoDB Atlas compatibility)
+# Verify OpenSSL version (required for Supabase SSL/TLS)
 RUN echo "=== OpenSSL Version ===" && openssl version && \
     echo "=== Python Version ===" && python --version
 
@@ -35,18 +35,18 @@ COPY backend/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
-# Verify critical packages are installed correctly
+# Verify critical packages are installed correctly (Supabase-based stack)
 RUN echo "=== Verifying Critical Packages ===" && \
     python - << 'EOF'
 import ssl
 import certifi
-import pymongo
 import httpx
+from supabase import create_client
 
 print("Certifi CA Bundle:", certifi.where())
-print("PyMongo version:", pymongo.__version__)
 print("SSL version:", ssl.OPENSSL_VERSION)
 print("HTTPX version:", httpx.__version__)
+print("Supabase SDK imported successfully")
 EOF
 
 

@@ -89,7 +89,7 @@ def create_indexes():
 class SupabaseTable:
     """
     Thin wrapper around a Supabase table that provides convenience methods.
-    This is NOT a MongoDB Collection – callers must use Supabase query patterns.
+    Maintains a similar interface to the legacy MongoDB pattern for easy migration.
     """
 
     def __init__(self, table_name: str):

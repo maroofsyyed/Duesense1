@@ -8,10 +8,18 @@ DueSense is a VC Deal Intelligence platform that analyzes startup pitch decks an
 DueSense/
 ├── backend/           # FastAPI backend
 │   ├── server.py      # Main API server (serves React frontend at /)
-│   ├── db.py          # Centralized MongoDB connection (lazy initialization)
+│   ├── db.py          # Centralized Supabase connection (lazy initialization)
+│   ├── database/      # Database schema and migrations
+│   │   └── schema.sql # PostgreSQL schema for Supabase
+│   ├── api/v1/        # Versioned API endpoints
+│   │   ├── auth.py    # API key authentication
+│   │   ├── health.py  # Health check endpoints
+│   │   ├── deals.py   # Deal management
+│   │   ├── ingestion.py # Pitch deck upload
+│   │   └── analytics.py # Dashboard stats
 │   ├── static/        # React frontend build (served at root)
 │   ├── services/      # Business logic modules
-│   │   ├── llm_provider.py      # HuggingFace LLM integration
+│   │   ├── llm_provider.py      # Multi-provider LLM (Z.ai, GROQ, HuggingFace)
 │   │   ├── enrichment_engine.py
 │   │   ├── scorer.py
 │   │   ├── memo_generator.py
@@ -33,22 +41,26 @@ DueSense/
 ## Backend Architecture
 
 ### LLM Provider
-- **Primary**: HuggingFace Inference API with `meta-llama/Meta-Llama-3.1-70B-Instruct`
-- **Fallback Models**: Mixtral 8x7B, Llama 3.1 8B, Zephyr 7B
+- **Multi-provider support** with automatic fallback:
+  1. **Z.ai** (OpenAI-compatible, fast and reliable) - `Z_API_KEY`
+  2. **GROQ** (fast inference) - `GROQ_API_KEY`
+  3. **HuggingFace** (free tier fallback) - `HUGGINGFACE_API_KEY`
 - **Auto-fallback**: On rate limits or model unavailability
-- **Configuration**: Set `HUGGINGFACE_API_KEY` or `HF_TOKEN` environment variable
+- **At least one provider required**
 
-### Database Connection Pattern
-- **Lazy initialization**: MongoDB client is created on first use, not at import time
+### Database: Supabase (PostgreSQL)
+- **Lazy initialization**: Supabase client is created on first use
 - **Centralized module**: All services import `db.py` for database access
-- **Connection resilience**: App starts even if MongoDB is temporarily unavailable
-- **Retries**: 3 connection attempts with 5-second delays during startup
-- **SSL/TLS**: Uses certifi CA bundle for MongoDB Atlas compatibility
+- **Connection resilience**: App starts even if Supabase is temporarily unavailable
+- **Retries**: 3 connection attempts with 2-second delays during startup
+- **Tables**: companies, pitch_decks, founders, enrichment_sources, competitors, investment_scores, investment_memos
 
 ### Key Files
-- `backend/db.py` - Centralized MongoDB connection management
+- `backend/db.py` - Centralized Supabase connection management
+- `backend/database/schema.sql` - PostgreSQL schema (run in Supabase SQL Editor)
 - `backend/server.py` - FastAPI app with lifespan manager
-- `backend/services/llm_provider.py` - HuggingFace LLM integration
+- `backend/services/llm_provider.py` - Multi-provider LLM integration
+- `backend/api/v1/auth.py` - API key authentication
 - `backend/runtime.txt` - Python version specification (`python-3.11.9`)
 
 ## Build & Run Commands
@@ -57,9 +69,11 @@ DueSense/
 ```bash
 cd backend
 pip install -r requirements.txt
-export MONGODB_URI="mongodb+srv://..."
-export DB_NAME="duesense"
-export HUGGINGFACE_API_KEY="hf_..."
+export SUPABASE_URL="https://xxx.supabase.co"
+export SUPABASE_SERVICE_ROLE_KEY="eyJ..."
+export Z_API_KEY="..." # or GROQ_API_KEY or HUGGINGFACE_API_KEY
+export DUESENSE_API_KEY="your-api-key"
+export ENABLE_DEMO_KEY="true" # Only for local testing
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -68,9 +82,11 @@ uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 cd backend
 docker build -t duesense-backend .
 docker run -p 10000:10000 \
-  -e MONGODB_URI="..." \
-  -e DB_NAME="duesense" \
-  -e HUGGINGFACE_API_KEY="hf_..." \
+  -e SUPABASE_URL="https://xxx.supabase.co" \
+  -e SUPABASE_SERVICE_ROLE_KEY="eyJ..." \
+  -e Z_API_KEY="..." \
+  -e DUESENSE_API_KEY="your-api-key" \
+  -e ENABLE_DEMO_KEY="false" \
   duesense-backend
 ```
 
@@ -79,9 +95,16 @@ docker run -p 10000:10000 \
 ### Required
 | Variable | Description |
 |----------|-------------|
-| `MONGODB_URI` or `MONGO_URL` | MongoDB Atlas connection string |
-| `DB_NAME` | Database name (default: `duesense`) |
-| `HUGGINGFACE_API_KEY` or `HF_TOKEN` | HuggingFace API token for LLM |
+| `SUPABASE_URL` | Supabase project URL (e.g., `https://xxx.supabase.co`) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (not anon key) |
+| LLM API Key | At least one: `Z_API_KEY`, `GROQ_API_KEY`, or `HUGGINGFACE_API_KEY` |
+
+### Recommended for Production
+| Variable | Description |
+|----------|-------------|
+| `DUESENSE_API_KEY` | API key for protected endpoints |
+| `ENABLE_DEMO_KEY` | Set to `false` in production (IMPORTANT!) |
+| `ALLOWED_ORIGINS` | CORS origins (comma-separated, e.g., `https://dominionvault.com,https://www.dominionvault.com`) |
 
 ### Optional
 | Variable | Description |
@@ -91,45 +114,60 @@ docker run -p 10000:10000 \
 | `NEWS_API_KEY` | NewsAPI key for news enrichment |
 | `SERPAPI_KEY` | SerpAPI key for search |
 | `MAX_FILE_SIZE_MB` | Max upload size (default: 25) |
-| `ALLOWED_ORIGINS` | CORS origins (comma-separated, default: *) |
 
 ## Render Deployment
 
 ### Configuration
 - **Runtime**: Docker
 - **Root Directory**: `backend`
-- **Python Version**: 3.11.9 (specified in `backend/runtime.txt`)
+- **Dockerfile Path**: `./Dockerfile`
 - **Health Check**: `/health`
 
 ### Deployment Steps
 1. Clear build cache in Render dashboard
-2. Set `MONGODB_URI` and `DB_NAME` environment variables
-3. Ensure MongoDB Atlas IP allowlist includes `0.0.0.0/0`
+2. Set all required environment variables (see above)
+3. Run `backend/database/schema.sql` in Supabase SQL Editor
 4. Deploy and verify `/health` endpoint returns `healthy`
 
 ### Troubleshooting
-- **SSL/TLS errors**: Ensure Python 3.11.x (not 3.13)
-- **Connection timeout**: Check MongoDB Atlas IP allowlist
-- **Import errors**: Check all services use `db.py` module
+- **Build failure (pymongo)**: Ensure Dockerfile doesn't reference pymongo
+- **SSL/TLS errors**: Ensure Docker runtime is used (not Python)
+- **Database errors**: Verify schema.sql was executed in Supabase
+- **LLM errors**: Check at least one LLM API key is set and valid
 
-## MongoDB Atlas Configuration
+## Supabase Configuration
 
-### Required Settings
-1. **Network Access**: Add `0.0.0.0/0` to IP allowlist (for Render free tier)
-2. **Connection String**: Use `mongodb+srv://` format with credentials
+### Setup Steps
+1. Create a new Supabase project
+2. Go to Settings → API to get URL and service role key
+3. Go to SQL Editor and run `backend/database/schema.sql`
+4. Verify tables were created in Table Editor
 
-### Connection String Format
-```
-mongodb+srv://<username>:<password>@cluster.mongodb.net/<database>?retryWrites=true&w=majority
-```
+### Required Tables
+- `companies` - Company information
+- `pitch_decks` - Uploaded deck metadata and extracted data
+- `founders` - Founder information
+- `enrichment_sources` - External data (GitHub, news, etc.)
+- `competitors` - Competitor information
+- `investment_scores` - 6-dimension investment scores
+- `investment_memos` - AI-generated investment memos
 
 ## API Endpoints
 
 ### Health Checks
-- `GET /health` - Full health check with DB status
-- `GET /api/health` - Simple API health check
+- `GET /health` - Full health check with DB and LLM status
+- `GET /api/v1/health` - Comprehensive health check
+- `GET /api/v1/health/live` - Kubernetes liveness probe
+- `GET /api/v1/health/ready` - Kubernetes readiness probe
 
-### Core Endpoints
+### Core Endpoints (API v1, require X-API-Key header)
+- `POST /api/v1/ingestion/upload` - Upload pitch deck
+- `GET /api/v1/ingestion/status/{deck_id}` - Get processing status
+- `GET /api/v1/deals` - List all deals/companies
+- `GET /api/v1/deals/{id}` - Get deal details with score and memo
+- `GET /api/v1/analytics/dashboard` - Dashboard statistics
+
+### Legacy Endpoints (still available)
 - `POST /api/decks/upload` - Upload pitch deck
 - `GET /api/companies` - List all companies
 - `GET /api/companies/{id}` - Get company details
@@ -138,9 +176,10 @@ mongodb+srv://<username>:<password>@cluster.mongodb.net/<database>?retryWrites=t
 
 ## Code Style Notes
 - All database access goes through `db.py` module
-- Collection accessors are functions, not global variables
+- Table accessors are functions returning `SupabaseTable` wrapper
 - Services import: `import db as database`
-- Access collections via: `database.companies_collection()`
+- Access tables via: `database.companies_collection()`
+- API key auth: `from api.v1.auth import verify_api_key`
 
 ## Frontend Deployment Architecture
 

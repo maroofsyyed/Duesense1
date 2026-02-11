@@ -23,7 +23,11 @@ Before starting, ensure you have:
 
 - ✅ A GitHub account
 - ✅ Your code pushed to GitHub repository: `maroofsyyed-duesense`
-- ✅ All API keys and secrets ready (MongoDB Atlas, HuggingFace API key, GitHub token, optional: ScraperAPI, SerpAPI, NewsAPI)
+- ✅ All API keys and secrets ready:
+  - **Required:** Supabase URL & service role key
+  - **Required:** At least one LLM provider (Z.ai, GROQ, or HuggingFace)
+  - **Recommended:** DUESENSE_API_KEY for API authentication
+  - **Optional:** GitHub token, NewsAPI, SerpAPI
 - ✅ Domain name: `dominionvault.com` (with DNS access)
 - ✅ Render account (free tier)
 - ✅ Vercel account (free tier)
@@ -55,14 +59,12 @@ Fill in the following:
 - **Region:** Choose closest to your users (e.g., `Oregon (US West)`)
 - **Branch:** `main` (or your default branch)
 - **Root Directory:** `backend`
-- **Runtime:** `Python 3`
-- **Build Command:** `pip install -r requirements.txt`
-- **Start Command:** `uvicorn server:app --host 0.0.0.0 --port $PORT`
-  - ⚠️ **CRITICAL:** The command is `uvicorn` (not `vicorn`). This is a common typo that will cause deployment failures.
+- **Runtime:** `Docker` (uses the provided Dockerfile)
+- **Dockerfile Path:** `./Dockerfile`
 
 **Important:** 
-- Render automatically sets the `PORT` environment variable. Your app reads it via `os.environ.get("PORT", 8000)`.
-- **Python Version:** The repository includes `backend/runtime.txt` specifying Python 3.11.9. This version is required for MongoDB Atlas SSL/TLS compatibility. Render will automatically use this version. If you need to change it, update `runtime.txt` or set `PYTHON_VERSION=3.11.9` in Render environment variables.
+- Render automatically sets the `PORT` environment variable (usually 10000).
+- **Python Version:** The Dockerfile uses Python 3.11.9 for SSL/TLS compatibility.
 
 ### Step 4: Add Environment Variables
 
@@ -71,19 +73,31 @@ In the **"Environment"** section, add these variables one by one:
 #### Required Variables
 
 ```
-MONGODB_URI
+SUPABASE_URL
 ```
-- **Value:** Your MongoDB Atlas connection string (starts with `mongodb+srv://`)
-- **Format:** `mongodb+srv://<username>:<password>@cluster.mongodb.net/<database>?retryWrites=true&w=majority`
-- **Important:** 
-  - You can use either `MONGODB_URI` or `MONGO_URL` (the app accepts both)
-  - Password should be URL-encoded if it contains special characters
-  - No spaces in the connection string
+- **Value:** Your Supabase project URL (e.g., `https://xxxxx.supabase.co`)
+- **Get it from:** Supabase Dashboard → Settings → API → Project URL
 
 ```
-DB_NAME
+SUPABASE_SERVICE_ROLE_KEY
 ```
-- **Value:** Your MongoDB database name (e.g., `duesense`)
+- **Value:** Your Supabase service role key (starts with `eyJ...`)
+- **Get it from:** Supabase Dashboard → Settings → API → Service Role Key
+- **Important:** This is the SERVICE ROLE key, not the anon key. Keep it secret!
+
+#### LLM Provider (at least one required)
+
+Choose at least ONE of the following:
+
+```
+Z_API_KEY
+```
+- **Value:** Your Z.ai API key (recommended - fast and reliable)
+
+```
+GROQ_API_KEY
+```
+- **Value:** Your GROQ API key (fast inference)
 
 ```
 HUGGINGFACE_API_KEY
@@ -91,6 +105,21 @@ HUGGINGFACE_API_KEY
 - **Value:** Your HuggingFace API token (starts with `hf_`)
 - **Get it from:** [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
 - **Note:** You can also use `HF_TOKEN` as the variable name
+
+#### API Authentication (strongly recommended for production)
+
+```
+DUESENSE_API_KEY
+```
+- **Value:** A strong, random API key (e.g., `ds_abc123xyz456...`)
+- **Generate:** Use a password generator or `openssl rand -hex 32`
+- **Purpose:** Required for protected API endpoints
+
+```
+ENABLE_DEMO_KEY
+```
+- **Value:** `false` (ALWAYS set to `false` in production!)
+- **Purpose:** Prevents use of demo key in production
 
 #### Optional Configuration
 
@@ -311,18 +340,18 @@ Run through this checklist to ensure everything works:
   - Expected: `{"status": "ok", "service": "vc-deal-intelligence"}`
 
 - [ ] **Python Version**
-  - Check Render logs for: "Using Python version 3.11.9"
-  - Verify `backend/runtime.txt` contains `python-3.11.9`
-  - If wrong version, clear build cache and redeploy
+  - Check Render logs for: "Python version: 3.11.x"
+  - Dockerfile uses Python 3.11.9 for SSL/TLS compatibility
+  - If issues, verify Dockerfile is being used (Runtime: Docker)
 
-- [ ] **MongoDB Connection**
-  - Check Render logs for MongoDB connection errors
-  - If errors, verify `MONGO_URL` and `DB_NAME` are correct
-  - Verify no SSL/TLS handshake errors (indicates Python version issue)
+- [ ] **Supabase Connection**
+  - Check Render logs for Supabase connection messages
+  - If errors, verify `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are correct
+  - Ensure schema.sql has been executed in Supabase
 
 - [ ] **API Endpoints**
-  - Test: `https://your-backend-url.onrender.com/api/companies`
-  - Expected: JSON response (may be empty array `{"companies": []}`)
+  - Test: `https://your-backend-url.onrender.com/api/v1/health`
+  - Expected: JSON with `{"status": "healthy", "components": {...}}`
 
 ### Frontend Checks
 
@@ -394,65 +423,50 @@ Run through this checklist to ensure everything works:
 #### Problem: Python version SSL/TLS compatibility issues
 
 **Symptoms:**
-- MongoDB connection fails with SSL/TLS handshake errors
+- Database connection fails with SSL/TLS handshake errors
 - Logs show: `SSL: CERTIFICATE_VERIFY_FAILED` or similar
-- Application fails to connect to MongoDB Atlas
 
 **Root Cause:**
-- Python 3.13.4 has known SSL/TLS compatibility issues with MongoDB Atlas
-- Application requires Python 3.11.9 for proper MongoDB connectivity
+- Application requires Python 3.11.9 for proper SSL/TLS connectivity
+- The Dockerfile specifies Python 3.11.9-bullseye
 
 **Solutions:**
-1. **Verify `runtime.txt` exists:**
-   - Check that `backend/runtime.txt` contains: `python-3.11.9`
-   - If missing or incorrect, create/update the file
+1. **Verify Docker Runtime:**
+   - Ensure Render is set to `Docker` runtime (not Python)
+   - Dockerfile uses `python:3.11.9-bullseye` for compatibility
 
 2. **Clear Build Cache:**
    - In Render dashboard → Your Service
    - Click "Manual Deploy" → "Clear build cache & deploy"
-   - This forces Render to use the Python version from `runtime.txt`
+   - This rebuilds the Docker image
 
 3. **Verify Python Version in Logs:**
    - After deployment, check Render logs
-   - Look for: "Using Python version 3.11.9" (not 3.13.4)
-   - If wrong version appears, verify `runtime.txt` is in `backend/` directory
+   - Look for: "Python Version === 3.11.x"
+   - If wrong version appears, verify Dockerfile is being used
 
-4. **Alternative: Set Environment Variable:**
-   - In Render → Environment Variables
-   - Add: `PYTHON_VERSION=3.11.9`
-   - This overrides any other Python version settings
-
-#### Problem: MongoDB connection fails
+#### Problem: Supabase connection fails
 
 **Symptoms:**
-- Logs show: `MongoDB connection failed`
-- Health endpoint returns 500 error
-- SSL/TLS handshake errors
+- Logs show: `SUPABASE_URL environment variable not set` or connection errors
+- Health endpoint returns degraded status
 
 **Solutions:**
-1. **Verify Python Version:**
-   - Check Render logs for Python version (should be 3.11.9)
-   - Verify `backend/runtime.txt` contains `python-3.11.9`
-   - Python 3.13.4 has known SSL/TLS compatibility issues with MongoDB Atlas
-   - If using wrong version, update `runtime.txt` and clear build cache
+1. **Verify Supabase Credentials:**
+   - Check `SUPABASE_URL` is correct (e.g., `https://xxxxx.supabase.co`)
+   - Check `SUPABASE_SERVICE_ROLE_KEY` is the service role key (not anon key)
+   - Keys are available in Supabase Dashboard → Settings → API
 
-2. **Verify MongoDB Connection String:**
-   - Environment variable must be `MONGO_URL` (not `MONGODB_URI`)
-   - Should start with `mongodb+srv://`
-   - Format: `mongodb+srv://<username>:<password>@cluster.mongodb.net/<database>?retryWrites=true&w=majority`
-   - Check for typos
-   - Password should be URL-encoded if it contains special characters
+2. **Verify Database Schema:**
+   - Ensure `backend/database/schema.sql` has been executed in Supabase
+   - Go to Supabase Dashboard → SQL Editor → New Query
+   - Paste and run the schema.sql contents
+   - Required tables: companies, pitch_decks, founders, enrichment_sources, competitors, investment_scores, investment_memos
 
-3. **Network Access:**
-   - Ensure MongoDB Atlas allows connections from Render IPs
-   - Go to MongoDB Atlas → Network Access
-   - Add `0.0.0.0/0` (allow from anywhere) for testing, or whitelist Render IPs
-   - Verify `DB_NAME` matches your MongoDB database name
-
-4. **Clear Build Cache:**
-   - In Render dashboard → Your Service → Manual Deploy
-   - Select "Clear build cache & deploy"
-   - This ensures the correct Python version is used
+3. **Check Supabase Dashboard:**
+   - Go to Supabase Dashboard → Authentication → Settings
+   - Ensure API is enabled
+   - Check Table Editor to verify tables exist
 
 #### Problem: API keys not working
 
@@ -568,8 +582,8 @@ Run through this checklist to ensure everything works:
 2. **Vercel Free Tier:**
    - Generally fast, but check Vercel dashboard for any issues
 3. **Database:**
-   - MongoDB Atlas M0 (free) has performance limits
-   - Check MongoDB Atlas dashboard for connection/query performance
+   - Supabase free tier has performance limits
+   - Check Supabase dashboard for query performance
 
 #### Problem: Render service sleeping
 
@@ -586,41 +600,37 @@ Run through this checklist to ensure everything works:
 
 ### Common Mistakes
 
-1. **Typo in start command: `vicorn` instead of `uvicorn`**
-   - ❌ `vicorn server:app --host 0.0.0.0 --port $PORT`
-   - ✅ `uvicorn server:app --host 0.0.0.0 --port $PORT`
-   - This typo causes: `bash: vicorn: command not found`
+1. **Using Python runtime instead of Docker**
+   - ❌ Render Runtime: Python 3
+   - ✅ Render Runtime: Docker
+   - The Dockerfile ensures correct Python version and dependencies
 
-2. **Wrong Python version causing MongoDB SSL/TLS issues**
-   - ❌ Using Python 3.13.4 (has SSL/TLS compatibility issues)
-   - ✅ Using Python 3.11.9 (specified in `backend/runtime.txt`)
-   - **Fix:** Ensure `backend/runtime.txt` contains `python-3.11.9`
-   - **Fix:** Clear build cache in Render after updating `runtime.txt`
+2. **Wrong Supabase key type**
+   - ❌ Using `SUPABASE_ANON_KEY` (limited permissions)
+   - ✅ Using `SUPABASE_SERVICE_ROLE_KEY` (full server-side access)
+   - Service role key is required for server-side operations
 
-3. **MongoDB environment variable**
-   - ✅ Both `MONGODB_URI` and `MONGO_URL` are accepted
-   - The app checks for either variable
-
-4. **Trailing slashes in URLs**
+3. **Trailing slashes in URLs**
    - ❌ `https://backend.onrender.com/`
    - ✅ `https://backend.onrender.com`
 
-5. **Wrong environment variable names**
+4. **Wrong environment variable names**
    - Must match exactly (case-sensitive)
-   - Check spelling: `MONGO_URL` not `MONGO_URI` or `MONGODB_URI`
+   - Required: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+   - LLM: At least one of `Z_API_KEY`, `GROQ_API_KEY`, `HUGGINGFACE_API_KEY`
 
-6. **Missing environment variables**
-   - All required variables must be set
-   - Check Render/Vercel dashboards to verify all are present
+5. **Missing schema initialization**
+   - Run `backend/database/schema.sql` in Supabase SQL Editor
+   - All tables must exist before deployment
+
+6. **Demo key enabled in production**
+   - ❌ `ENABLE_DEMO_KEY=true`
+   - ✅ `ENABLE_DEMO_KEY=false`
+   - Always disable demo key in production
 
 7. **Wrong root directory**
    - Render: `backend` (not root)
    - Vercel: `frontend` (not root)
-
-8. **Build command errors**
-   - Ensure `requirements.txt` is in `backend/`
-   - Ensure `package.json` is in `frontend/`
-   - Ensure `runtime.txt` is in `backend/` for Python version specification
 
 ---
 
@@ -637,17 +647,18 @@ After successful deployment:
    - Set up error alerts
 
 3. **Backup Strategy**
-   - MongoDB Atlas provides automatic backups on paid tiers
-   - Consider exporting data regularly
+   - Supabase provides automatic backups on paid tiers
+   - Consider exporting data regularly via Supabase dashboard
 
 4. **Security**
    - Never commit API keys to GitHub
    - Rotate API keys periodically
    - Review API key permissions
+   - Keep `ENABLE_DEMO_KEY=false` in production
 
 5. **Scaling Considerations**
    - Free tiers have limits (requests, compute time, etc.)
-   - Monitor usage in Render/Vercel dashboards
+   - Monitor usage in Render/Vercel/Supabase dashboards
    - Plan for paid tiers when you outgrow free limits
 
 ---
@@ -656,7 +667,7 @@ After successful deployment:
 
 - **Render Documentation:** [render.com/docs](https://render.com/docs)
 - **Vercel Documentation:** [vercel.com/docs](https://vercel.com/docs)
-- **MongoDB Atlas:** [docs.atlas.mongodb.com](https://docs.atlas.mongodb.com)
+- **Supabase Documentation:** [supabase.com/docs](https://supabase.com/docs)
 - **FastAPI Documentation:** [fastapi.tiangolo.com](https://fastapi.tiangolo.com)
 - **React Documentation:** [react.dev](https://react.dev)
 
