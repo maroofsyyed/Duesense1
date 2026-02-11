@@ -33,27 +33,44 @@ async def health_check():
     """
     Comprehensive health check endpoint.
     
-    Returns status of all system components.
+    Returns status of all system components including database and LLM.
     """
     components = {}
     overall_status = "healthy"
     
-    # Check database
+    # Check Supabase database
     db_start = datetime.now(timezone.utc)
     try:
         client = database.get_client()
-        client.admin.command('ping')
+        # Simple SELECT to verify connection
+        client.table("companies").select("id").limit(1).execute()
         db_latency = (datetime.now(timezone.utc) - db_start).total_seconds() * 1000
         components["database"] = {
             "status": "healthy",
             "latency_ms": round(db_latency, 2),
-            "type": "mongodb"
+            "type": "supabase"
         }
     except Exception as e:
         components["database"] = {
             "status": "unhealthy",
             "message": str(e)[:100],
-            "type": "mongodb"
+            "type": "supabase"
+        }
+        overall_status = "degraded"
+    
+    # Check LLM provider
+    try:
+        from services.llm_provider import llm
+        llm._validate_token()
+        components["llm"] = {
+            "status": "healthy",
+            "provider": llm.current_provider["name"],
+            "model": llm.current_model
+        }
+    except Exception as e:
+        components["llm"] = {
+            "status": "unhealthy",
+            "message": str(e)[:100]
         }
         overall_status = "degraded"
     
@@ -88,11 +105,11 @@ async def readiness():
     """
     Kubernetes-style readiness probe.
     
-    Returns 200 if the service is ready to accept traffic.
+    Returns 200 if the service is ready to accept traffic (database connected).
     """
     try:
         client = database.get_client()
-        client.admin.command('ping')
+        client.table("companies").select("id").limit(1).execute()
         return {"status": "ready", "database": "connected"}
     except Exception:
         return {"status": "not_ready", "database": "disconnected"}
