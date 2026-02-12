@@ -1,148 +1,141 @@
 """
-LLM Provider for DueSense
-Production-safe multi-provider LLM with graceful degradation.
-
-Provider priority:
-1. GROQ (primary)
-2. Z.ai (secondary)
-
-Design goals:
-- Never crash production
-- Never spam retries
-- Never rely on unstable free HF models
-- Always return deterministic output
+Production-grade LLM Provider for DueSense
+- Proactive load balancing (Groq / Z.ai)
+- Circuit breaker on rate limits
+- Safe fallbacks (never crash pipeline)
 """
 
 import os
 import json
+import time
+import random
 import logging
-from typing import Optional, Dict, Any, List
-
+from typing import Dict, Any, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
 
+# ----------------------------
+# Provider circuit state
+# ----------------------------
+PROVIDER_STATE = {
+    "groq": {"failures": 0, "disabled_until": 0},
+    "zai": {"failures": 0, "disabled_until": 0},
+}
 
+FAILURE_THRESHOLD = 3       # failures before cooldown
+COOLDOWN_SECONDS = 60       # provider cooldown time
+
+
+def provider_available(name: str) -> bool:
+    return time.time() > PROVIDER_STATE[name]["disabled_until"]
+
+
+def mark_failure(name: str):
+    PROVIDER_STATE[name]["failures"] += 1
+    if PROVIDER_STATE[name]["failures"] >= FAILURE_THRESHOLD:
+        PROVIDER_STATE[name]["disabled_until"] = time.time() + COOLDOWN_SECONDS
+        PROVIDER_STATE[name]["failures"] = 0
+        logger.warning(f"🚫 Provider {name} disabled for {COOLDOWN_SECONDS}s")
+
+
+# ----------------------------
+# LLM Provider
+# ----------------------------
 class LLMProvider:
     def __init__(self):
-        # Load API keys
-        self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.z_api_key = os.getenv("Z_API_KEY")
+        self.groq_key = os.getenv("GROQ_API_KEY")
+        self.zai_key = os.getenv("Z_API_KEY")
 
-        self.providers: List[Dict[str, Any]] = []
+        if not self.groq_key and not self.zai_key:
+            raise RuntimeError("No LLM providers configured")
 
-        # --- GROQ (PRIMARY) ---
-        if self.groq_api_key:
-            self.providers.append({
-                "name": "groq",
-                "type": "openai",
-                "api_key": self.groq_api_key,
-                "base_url": "https://api.groq.com/openai/v1",
-                "model": "llama-3.3-70b-versatile",
-                "fallback_models": ["llama-3.1-8b-instant"],
-            })
-            logger.info("✓ GROQ provider configured")
+        logger.info("✓ LLM providers initialized (Groq / Z.ai)")
 
-        # --- Z.AI (SECONDARY) ---
-        if self.z_api_key:
-            self.providers.append({
-                "name": "z.ai",
-                "type": "openai",
-                "api_key": self.z_api_key,
-                "base_url": "https://api.zukijourney.com/v1",
-                "model": "gpt-4o-mini",
-            })
-            logger.info("✓ Z.ai provider configured")
+    # ----------------------------
+    # Provider selection (60/40)
+    # ----------------------------
+    def _choose_provider(self) -> Optional[str]:
+        candidates = []
 
-        if not self.providers:
-            logger.error("❌ No LLM providers configured")
-            raise RuntimeError(
-                "Set at least one of GROQ_API_KEY or Z_API_KEY"
-            )
+        if self.groq_key and provider_available("groq"):
+            candidates += ["groq"] * 6  # 60%
+        if self.zai_key and provider_available("zai"):
+            candidates += ["zai"] * 4   # 40%
 
-        self.current_provider = self.providers[0]
-        self.current_model = self.current_provider["model"]
+        return random.choice(candidates) if candidates else None
 
-        logger.info(
-            "✓ LLM configured with providers: %s",
-            ", ".join(p["name"] for p in self.providers),
-        )
-
-    # ------------------------------------------------------------------
-    # Backward compatibility (server.py expects this)
-    # ------------------------------------------------------------------
-    def _validate_token(self):
-        return True
-
-    # ------------------------------------------------------------------
-    # TEXT GENERATION
-    # ------------------------------------------------------------------
+    # ----------------------------
+    # Public API
+    # ----------------------------
     async def generate(
         self,
         prompt: str,
         system_message: str = "You are a helpful assistant.",
-        model: Optional[str] = None,
-        max_tokens: int = 2048,
-        temperature: float = 0.1,
-        timeout: float = 60.0,
+        max_tokens: int = 800,
+        temperature: float = 0.2,
     ) -> str:
-        """
-        Generate text with strict retry limits and graceful fallback.
-        """
-        last_error: Optional[Exception] = None
-        attempts = 0
-        MAX_ATTEMPTS = 2
 
-        for provider in self.providers:
-            models = [model or provider["model"]]
-            models += provider.get("fallback_models", [])
+        provider = self._choose_provider()
 
-            for m in models:
-                attempts += 1
-                if attempts > MAX_ATTEMPTS:
-                    break
+        if not provider:
+            logger.error("❌ No LLM providers available")
+            return self._safe_fallback()
 
-                try:
-                    logger.info(f"🤖 LLM call via {provider['name']} ({m})")
-                    result = await self._call_openai_compatible(
-                        provider=provider,
-                        model=m,
-                        prompt=prompt,
-                        system_message=system_message,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        timeout=timeout,
-                    )
+        try:
+            if provider == "groq":
+                return await self._call_groq(
+                    prompt, system_message, max_tokens, temperature
+                )
+            else:
+                return await self._call_zai(
+                    prompt, system_message, max_tokens, temperature
+                )
 
-                    self.current_provider = provider
-                    self.current_model = m
-                    logger.info(f"✓ LLM response from {provider['name']} ({len(result)} chars)")
-                    return result
+        except Exception as e:
+            logger.warning(f"⚠️ {provider} failed: {e}")
+            mark_failure(provider)
+            return self._safe_fallback()
 
-                except Exception as e:
-                    last_error = e
-                    logger.warning(
-                        f"⚠️ {provider['name']} ({m}) failed: {type(e).__name__}: {str(e)[:200]}"
-                    )
-                    break  # move to next provider
-
-        logger.error(f"❌ All LLM providers failed. Last error: {last_error}")
-        return self._safe_text_fallback()
-
-    # ------------------------------------------------------------------
-    # OPENAI-COMPATIBLE CALL (Groq / Z.ai)
-    # ------------------------------------------------------------------
-    async def _call_openai_compatible(
+    # ----------------------------
+    # JSON-safe generation
+    # ----------------------------
+    async def generate_json(
         self,
-        provider: Dict[str, Any],
-        model: str,
+        prompt: str,
+        system_message: str = "Respond ONLY with valid JSON.",
+    ) -> Dict[str, Any]:
+
+        text = await self.generate(prompt, system_message)
+
+        try:
+            return json.loads(text)
+        except Exception:
+            logger.error("❌ JSON parse failed")
+            return {}
+
+    # ----------------------------
+    # Groq (primary)
+    # ----------------------------
+    async def _call_groq(
+        self,
         prompt: str,
         system_message: str,
         max_tokens: int,
         temperature: float,
-        timeout: float,
     ) -> str:
-        url = f"{provider['base_url']}/chat/completions"
+
+        # Use small model unless explicitly large prompt
+        model = (
+            "llama-3.3-70b-versatile"
+            if len(prompt) > 4000
+            else "llama-3.1-8b-instant"
+        )
+
+        headers = {
+            "Authorization": f"Bearer {self.groq_key}",
+            "Content-Type": "application/json",
+        }
 
         payload = {
             "model": model,
@@ -154,76 +147,73 @@ class LLMProvider:
             "temperature": temperature,
         }
 
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+
+        if r.status_code == 429:
+            raise RuntimeError("Groq rate limited")
+
+        if r.status_code >= 500:
+            raise RuntimeError("Groq server error")
+
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+
+    # ----------------------------
+    # Z.ai (secondary)
+    # ----------------------------
+    async def _call_zai(
+        self,
+        prompt: str,
+        system_message: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+
         headers = {
-            "Authorization": f"Bearer {provider['api_key']}",
+            "Authorization": f"Bearer {self.zai_key}",
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload, headers=headers)
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
 
-            if response.status_code == 429:
-                raise RuntimeError("Rate limited")
-            if response.status_code >= 500:
-                raise RuntimeError("Provider server error")
-            if response.status_code == 401:
-                raise RuntimeError("Invalid API key")
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://api.zukijourney.com/v1/chat/completions",
+                headers=headers,
+                json=payload,
+            )
 
-            response.raise_for_status()
-            data = response.json()
+        if r.status_code == 429:
+            raise RuntimeError("Z.ai rate limited")
 
-            try:
-                return data["choices"][0]["message"]["content"]
-            except Exception:
-                raise RuntimeError("Malformed LLM response")
+        if r.status_code >= 500:
+            raise RuntimeError("Z.ai server error")
 
-    # ------------------------------------------------------------------
-    # JSON GENERATION (SAFE)
-    # ------------------------------------------------------------------
-    async def generate_json(
-        self,
-        prompt: str,
-        system_message: str = "Respond with valid JSON only.",
-        model: Optional[str] = None,
-    ) -> dict:
-        text = await self.generate(
-            prompt=prompt,
-            system_message=system_message,
-            model=model,
-        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
 
-        try:
-            return json.loads(self._extract_json(text))
-        except Exception:
-            logger.error("❌ JSON parse failed – returning safe defaults")
-            return {
-                "status": "partial",
-                "reason": "llm_unavailable",
-            }
-
-    # ------------------------------------------------------------------
-    # HELPERS
-    # ------------------------------------------------------------------
-    def _extract_json(self, text: str) -> str:
-        text = text.strip()
-
-        if text.startswith("```"):
-            text = text.strip("```").strip()
-
-        start = text.find("{")
-        end = text.rfind("}") + 1
-
-        if start != -1 and end > start:
-            return text[start:end]
-
-        raise ValueError("No JSON object found")
-
-    def _safe_text_fallback(self) -> str:
+    # ----------------------------
+    # Safe fallback (never crash)
+    # ----------------------------
+    def _safe_fallback(self) -> str:
         return (
-            "The analysis could not be fully completed due to temporary "
-            "LLM unavailability. Partial results may be shown."
+            "Information is temporarily unavailable due to system load. "
+            "Partial results have been generated."
         )
 
 
-# Global singleton
+# Singleton
 llm = LLMProvider()
