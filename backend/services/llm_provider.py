@@ -342,10 +342,20 @@ class LLMProvider:
         system_message: str = "You are a helpful assistant. Always respond with valid JSON only.",
         model: Optional[str] = None
     ) -> dict:
-        """Generate JSON response with robust parsing."""
+        """Generate JSON response with robust parsing and repair."""
         enhanced_system = system_message
         if "json" not in system_message.lower():
             enhanced_system += "\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown, no backticks, no explanation."
+        
+        # Add explicit JSON rules
+        enhanced_system += """
+
+JSON RULES:
+- Use null for missing/unknown values (NOT "not_mentioned", "N/A", or "unknown")
+- Use true/false for booleans (NOT "true"/"false" strings)
+- All string values must be in double quotes
+- No trailing commas
+- No comments"""
         
         response = await self.generate(prompt, enhanced_system, model)
         
@@ -361,6 +371,9 @@ class LLMProvider:
             text = text[:-3]
         text = text.strip()
         
+        # Repair common LLM JSON mistakes
+        text = self._repair_json(text)
+        
         # Try direct parse
         try:
             return json.loads(text)
@@ -371,8 +384,10 @@ class LLMProvider:
         start = text.find("{")
         end = text.rfind("}") + 1
         if start != -1 and end > start:
+            json_text = text[start:end]
+            json_text = self._repair_json(json_text)
             try:
-                return json.loads(text[start:end])
+                return json.loads(json_text)
             except json.JSONDecodeError:
                 pass
         
@@ -380,13 +395,52 @@ class LLMProvider:
         start = text.find("[")
         end = text.rfind("]") + 1
         if start != -1 and end > start:
+            json_text = text[start:end]
+            json_text = self._repair_json(json_text)
             try:
-                return json.loads(text[start:end])
+                return json.loads(json_text)
             except json.JSONDecodeError:
                 pass
         
         logger.error(f"❌ Could not parse JSON. Response: {text[:500]}")
         raise ValueError(f"LLM did not return valid JSON. Response preview: {text[:200]}...")
+    
+    def _repair_json(self, text: str) -> str:
+        """Repair common JSON mistakes made by LLMs."""
+        import re
+        
+        # Replace unquoted special values with null
+        # Matches: not_mentioned, unknown, N/A, none, etc. when not in quotes
+        unquoted_patterns = [
+            (r':\s*not_mentioned\s*([,}\]])', r': null\1'),
+            (r':\s*not_available\s*([,}\]])', r': null\1'),
+            (r':\s*unknown\s*([,}\]])', r': null\1'),
+            (r':\s*N/A\s*([,}\]])', r': null\1'),
+            (r':\s*n/a\s*([,}\]])', r': null\1'),
+            (r':\s*none\s*([,}\]])', r': null\1'),
+            (r':\s*undefined\s*([,}\]])', r': null\1'),
+            (r':\s*NA\s*([,}\]])', r': null\1'),
+            # Handle unquoted True/False (Python style)
+            (r':\s*True\s*([,}\]])', r': true\1'),
+            (r':\s*False\s*([,}\]])', r': false\1'),
+            # Handle unquoted None (Python style)
+            (r':\s*None\s*([,}\]])', r': null\1'),
+        ]
+        
+        for pattern, replacement in unquoted_patterns:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+        # Remove trailing commas before } or ]
+        text = re.sub(r',\s*}', '}', text)
+        text = re.sub(r',\s*\]', ']', text)
+        
+        # Fix single quotes to double quotes (be careful with apostrophes)
+        # Only replace single quotes that are clearly JSON delimiters
+        # Pattern: key-value pairs with single quotes
+        text = re.sub(r"'([^']+)'(\s*:)", r'"\1"\2', text)  # Keys
+        text = re.sub(r":\s*'([^']*)'(\s*[,}\]])", r': "\1"\2', text)  # String values
+        
+        return text
     
     async def test_connection(self) -> bool:
         """Test LLM connection with a simple prompt."""

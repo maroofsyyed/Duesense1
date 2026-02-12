@@ -124,88 +124,97 @@ def _extract_pptx(content: bytes) -> str:
 
 
 async def _structure_with_llm(text: str) -> dict:
-    prompt = f"""You are an expert at extracting structured data from startup pitch decks.
+    prompt = f"""Extract structured data from this startup pitch deck.
 
-CRITICAL RULES:
-1. ONLY extract information EXPLICITLY stated in the text
-2. Use null for any missing fields - NEVER guess or hallucinate
-3. Quote exact numbers - no rounding
-4. Be precise about what the company does
+OUTPUT FORMAT: Return ONLY a valid JSON object. No markdown, no code blocks, no explanations.
 
-Extract the following JSON structure from the pitch deck text below:
+CRITICAL JSON RULES:
+- Use null (not "null", not "not_mentioned", not "N/A") for missing values
+- Use true/false (not "true"/"false" strings) for booleans
+- All strings must be in double quotes
+- Arrays can be empty [] if no data found
 
+EXTRACTION RULES:
+- ONLY extract information EXPLICITLY stated in the text
+- Use null for any missing fields - NEVER guess or hallucinate
+- Quote exact numbers from the deck - no rounding
+
+JSON STRUCTURE TO FILL:
 {{
   "company": {{
-    "name": "string - company name",
-    "tagline": "string - one-line description",
-    "founded": "string - year or null",
+    "name": "string",
+    "tagline": "string or null",
+    "founded": "string year or null",
     "hq_location": "string or null",
     "website": "string or null",
-    "stage": "pre-seed | seed | series-a | series-b | series-c+ | null",
-    "industry": "string - primary industry"
+    "stage": "pre-seed|seed|series-a|series-b|series-c+|null",
+    "industry": "string"
   }},
   "founders": [
     {{
       "name": "string",
-      "role": "string - CEO/CTO/etc",
+      "role": "string",
       "linkedin": "string or null",
       "github": "string or null",
-      "previous_companies": ["string"],
-      "years_in_industry": "number or null",
+      "previous_companies": [],
+      "years_in_industry": null,
       "education": "string or null"
     }}
   ],
   "problem": {{
-    "statement": "string - QUOTE from deck if possible",
-    "market_pain": "string",
-    "current_solutions": ["string"]
+    "statement": "string",
+    "market_pain": "string or null",
+    "current_solutions": []
   }},
   "solution": {{
-    "product_description": "string - what the product does",
-    "key_features": ["string"],
-    "technology_stack": ["string"],
+    "product_description": "string",
+    "key_features": [],
+    "technology_stack": [],
     "ai_usage": {{
-      "is_ai_core": true/false,
-      "ai_description": "string or null",
-      "proprietary_data": true/false,
-      "model_architecture": "string or null"
+      "is_ai_core": false,
+      "ai_description": null,
+      "proprietary_data": false,
+      "model_architecture": null
     }}
   }},
   "market": {{
-    "tam": "string with $ amount or null",
-    "sam": "string with $ amount or null",
-    "som": "string with $ amount or null",
+    "tam": "string with $ or null",
+    "sam": "string with $ or null",
+    "som": "string with $ or null",
     "growth_rate": "string or null",
-    "target_customers": "string"
+    "target_customers": "string or null"
   }},
   "traction": {{
-    "revenue": "string with $ amount or null",
+    "revenue": "string with $ or null",
     "mrr": "string or null",
-    "customers": "number or null",
+    "customers": null,
     "growth_rate": "string or null",
     "key_metrics": {{}}
   }},
   "business_model": {{
-    "type": "SaaS | Marketplace | Enterprise | etc",
+    "type": "SaaS|Marketplace|Enterprise|Other|null",
     "pricing": "string or null",
     "unit_economics": "string or null"
   }},
   "funding": {{
-    "seeking": "string with $ amount or null",
-    "previous_rounds": ["string"],
+    "seeking": "string with $ or null",
+    "previous_rounds": [],
     "total_raised": "string or null",
     "valuation": "string or null"
   }},
-  "competitive_advantages": ["string"],
-  "risks": ["string"]
+  "competitive_advantages": [],
+  "risks": []
 }}
 
 PITCH DECK TEXT:
 {text[:12000]}
 
-Return ONLY valid JSON. No markdown formatting, no explanations."""
+OUTPUT (valid JSON only):"""
 
-    system = "You are a precise data extraction assistant for venture capital due diligence. Extract ONLY factual information. Never hallucinate or guess. Use null for missing data."
+    system = """You are a precise JSON data extraction assistant. 
+IMPORTANT: Output ONLY valid JSON. No explanations, no markdown.
+Use null for missing values. Use true/false for booleans.
+Never use unquoted words like not_mentioned or N/A."""
 
     result = await llm.generate_json(prompt, system)
     return result
