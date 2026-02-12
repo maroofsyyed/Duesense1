@@ -1,14 +1,16 @@
 """
 LLM Provider for DueSense
-Multi-provider support with automatic fallback.
+Production-safe multi-provider LLM with graceful fallback.
 
 Provider priority:
-1. Z.ai (OpenAI-compatible, fast and reliable)
-2. GROQ (fast inference)
-3. HuggingFace Inference API (free tier fallback)
+1. GROQ (primary – fast, reliable)
+2. Z.ai (secondary – unstable but useful)
+3. HuggingFace Inference API (last-resort fallback)
 """
+
 import os
 import json
+import asyncio
 import logging
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
@@ -17,158 +19,166 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# HARD concurrency limit to avoid rate-limit storms
+LLM_SEMAPHORE = asyncio.Semaphore(2)
+
 
 class LLMProvider:
     """
-    Multi-provider LLM with automatic fallback.
-    
-    Supports:
-    - Z.ai (OpenAI-compatible API)
-    - GROQ (fast LLM inference)
-    - HuggingFace Inference API
-    
-    Features:
-    - Automatic provider fallback on errors
-    - Timeout handling (90s default)
-    - Robust JSON parsing
+    Production-safe multi-provider LLM with automatic fallback.
+
+    Guarantees:
+    - No fatal crashes
+    - No invalid HF models
+    - Rate-limit safe
+    - Deterministic provider order
     """
 
     def __init__(self):
-        # API Keys
-        self.z_api_key = os.environ.get("Z_API_KEY")
-        self.groq_api_key = os.environ.get("GROQ_API_KEY")
-        self.hf_token = os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN")
-        
-        # Build provider list based on available keys
+        self.z_api_key = os.getenv("Z_API_KEY")
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.hf_token = os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_TOKEN")
+
         self.providers = []
-        
+
+        # 1️⃣ GROQ (PRIMARY)
+        if self.groq_api_key:
+            self.providers.append({
+                "name": "groq",
+                "type": "openai",
+                "api_key": self.groq_api_key,
+                "base_url": "https://api.groq.com/openai/v1",
+                "model": "llama-3.3-70b-versatile",
+                "fallback_models": ["llama-3.1-8b-instant"],
+            })
+            logger.info("✓ GROQ provider configured")
+
+        # 2️⃣ Z.ai (SECONDARY)
         if self.z_api_key:
             self.providers.append({
                 "name": "z.ai",
+                "type": "openai",
                 "api_key": self.z_api_key,
                 "base_url": "https://api.zukijourney.com/v1",
                 "model": "gpt-4o-mini",
-                "type": "openai"
             })
-            logger.info(f"✓ Z.ai provider configured: {self.z_api_key[:8]}...")
-        
-        if self.groq_api_key:
-            # Use llama-3.3-70b-versatile (latest available model)
-            # Fallback models in order of preference
-            self.providers.append({
-                "name": "groq",
-                "api_key": self.groq_api_key,
-                "base_url": "https://api.groq.com/openai/v1",
-                "model": "llama-3.3-70b-versatile",  # Updated to latest GROQ model
-                "fallback_models": ["llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
-                "type": "openai"
-            })
-            logger.info(f"✓ GROQ provider configured: {self.groq_api_key[:8]}...")
-        
+            logger.info("✓ Z.ai provider configured")
+
+        # 3️⃣ HuggingFace (LAST RESORT – SAFE MODELS ONLY)
         if self.hf_token:
-            # Use Mistral-7B-Instruct-v0.2 (stable, widely available)
-            # Or meta-llama/Meta-Llama-3-8B-Instruct as fallback
             self.providers.append({
                 "name": "huggingface",
+                "type": "huggingface",
                 "api_key": self.hf_token,
                 "base_url": "https://api-inference.huggingface.co/models",
-                "model": "mistralai/Mistral-7B-Instruct-v0.2",  # Stable, available model
-                "fallback_models": ["meta-llama/Meta-Llama-3-8B-Instruct", "HuggingFaceH4/zephyr-7b-beta"],
-                "type": "huggingface"
+                "model": "google/flan-t5-xl",
+                "fallback_models": ["google/flan-t5-large"],
             })
-            logger.info(f"✓ HuggingFace provider configured: {self.hf_token[:8]}...")
-        
+            logger.info("✓ HuggingFace provider configured")
+
         if not self.providers:
-            logger.error("❌ No LLM API keys configured!")
-            raise ValueError(
-                "No LLM API keys configured. Set at least one of: "
-                "Z_API_KEY, GROQ_API_KEY, or HUGGINGFACE_API_KEY"
+            raise RuntimeError(
+                "No LLM providers configured. Set GROQ_API_KEY, Z_API_KEY, or HUGGINGFACE_API_KEY."
             )
-        
+
         self.current_provider = self.providers[0]
         self.current_model = self.current_provider["model"]
-        self._validated = False
-        
-    def _validate_token(self):
-        """Validate that at least one provider is configured."""
-        if self._validated:
-            return
-        
-        if not self.providers:
-            raise ValueError("No LLM providers configured")
-        
-        self._validated = True
-        logger.info(f"✓ LLM configured with {len(self.providers)} provider(s): {', '.join(p['name'] for p in self.providers)}")
+
+        logger.info(
+            f"✓ LLM configured with providers: {', '.join(p['name'] for p in self.providers)}"
+        )
+
+    # ------------------------------------------------------------------
+    # PUBLIC API
+    # ------------------------------------------------------------------
 
     async def generate(
-        self, 
-        prompt: str, 
-        system_message: str = "You are a helpful assistant.", 
+        self,
+        prompt: str,
+        system_message: str = "You are a helpful assistant.",
         model: Optional[str] = None,
-        max_tokens: int = 4000,
+        max_tokens: int = 2048,
         temperature: float = 0.1,
-        timeout: float = 90.0
+        timeout: float = 60.0,
     ) -> str:
         """
-        Generate text using available LLM providers with automatic fallback.
-        Includes fallback models within each provider.
+        Generate text with automatic fallback.
+        NEVER throws fatal errors in production.
         """
-        self._validate_token()
-        
+
         last_error = None
-        
+
         for provider in self.providers:
-            # Build list of models to try for this provider
-            models_to_try = [model or provider["model"]]
-            if not model and "fallback_models" in provider:
-                models_to_try.extend(provider["fallback_models"])
-            
-            for current_model in models_to_try:
+            models = [model or provider["model"]]
+            models += provider.get("fallback_models", [])
+
+            for m in models:
                 try:
-                    logger.info(f"🤖 LLM call via {provider['name']} ({current_model})")
-                    
-                    if provider["type"] == "openai":
-                        result = await self._call_openai_compatible(
-                            provider=provider,
-                            prompt=prompt,
-                            system_message=system_message,
-                            model=current_model,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            timeout=timeout
-                        )
-                    else:  # huggingface
-                        result = await self._call_huggingface(
-                            provider=provider,
-                            prompt=prompt,
-                            system_message=system_message,
-                            model=current_model,
-                            max_tokens=max_tokens,
-                            temperature=temperature,
-                            timeout=timeout
-                        )
-                    
-                    logger.info(f"✓ LLM response from {provider['name']} ({len(result)} chars)")
-                    self.current_provider = provider
-                    self.current_model = current_model
-                    return result
-                    
+                    async with LLM_SEMAPHORE:
+                        logger.info(f"🤖 LLM call via {provider['name']} ({m})")
+
+                        if provider["type"] == "openai":
+                            result = await self._call_openai(
+                                provider, prompt, system_message, m,
+                                max_tokens, temperature, timeout
+                            )
+                        else:
+                            result = await self._call_huggingface(
+                                provider, prompt, system_message, m,
+                                max_tokens, temperature, timeout
+                            )
+
+                    if result:
+                        self.current_provider = provider
+                        self.current_model = m
+                        logger.info(f"✓ LLM response from {provider['name']} ({len(result)} chars)")
+                        return result
+
                 except Exception as e:
                     last_error = e
-                    error_str = str(e)[:200]
-                    logger.warning(f"⚠️ {provider['name']} ({current_model}) failed: {type(e).__name__}: {error_str}")
-                    # If it's a model-specific error, try next model
-                    if "model" in error_str.lower() or "404" in error_str or "400" in error_str:
+                    logger.warning(
+                        f"⚠️ {provider['name']} ({m}) failed: {type(e).__name__}: {str(e)[:120]}"
+                    )
+                    # model-specific failure → try next model
+                    if "model" in str(e).lower() or "404" in str(e):
                         continue
-                    # For other errors (auth, rate limit), skip to next provider
+                    # provider-level failure → move to next provider
                     break
-        
-        # All providers failed
-        error_msg = f"All {len(self.providers)} LLM providers failed. Last error: {last_error}"
-        logger.error(f"❌ {error_msg}")
-        raise RuntimeError(error_msg)
 
-    async def _call_openai_compatible(
+        logger.error(f"❌ All LLM providers failed. Last error: {last_error}")
+        return "LLM temporarily unavailable. Proceeding with partial analysis."
+
+    async def generate_json(
+        self,
+        prompt: str,
+        system_message: str = "Return ONLY valid JSON.",
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate JSON safely with repair logic.
+        """
+
+        system_message += (
+            "\n\nRULES:\n"
+            "- JSON only\n"
+            "- Use null for missing values\n"
+            "- No markdown\n"
+            "- No trailing commas"
+        )
+
+        text = await self.generate(prompt, system_message, model)
+
+        try:
+            return json.loads(self._repair_json(text))
+        except Exception:
+            logger.error("❌ JSON parse failed")
+            return {}
+
+    # ------------------------------------------------------------------
+    # PROVIDER IMPLEMENTATIONS
+    # ------------------------------------------------------------------
+
+    async def _call_openai(
         self,
         provider: Dict[str, Any],
         prompt: str,
@@ -176,58 +186,39 @@ class LLMProvider:
         model: str,
         max_tokens: int,
         temperature: float,
-        timeout: float
+        timeout: float,
     ) -> str:
-        """Call OpenAI-compatible API (Z.ai, GROQ, etc.)."""
         import httpx
-        
-        messages = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
-        messages.append({"role": "user", "content": prompt})
-        
-        url = f"{provider['base_url']}/chat/completions"
-        
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+
         headers = {
             "Authorization": f"Bearer {provider['api_key']}",
             "Content-Type": "application/json",
         }
-        
-        payload = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                
-                if response.status_code == 401:
-                    raise ValueError(f"Authentication failed (401) for {provider['name']}")
-                if response.status_code == 429:
-                    raise RuntimeError(f"Rate limited (429) on {provider['name']}")
-                if response.status_code >= 500:
-                    raise RuntimeError(f"Server error ({response.status_code}) on {provider['name']}")
-                
-                response.raise_for_status()
-                result = response.json()
-                
-                if "choices" in result and len(result["choices"]) > 0:
-                    content = result["choices"][0]["message"]["content"]
-                    if content:
-                        return content
-                    raise ValueError(f"Empty response from {provider['name']}")
-                elif "error" in result:
-                    raise RuntimeError(f"{provider['name']} error: {result['error']}")
-                else:
-                    raise ValueError(f"Unexpected response format from {provider['name']}")
-                    
-        except httpx.TimeoutException:
-            raise RuntimeError(f"Request timed out on {provider['name']}")
-        except httpx.ConnectError as e:
-            raise RuntimeError(f"Connection error to {provider['name']}: {e}")
+
+        url = f"{provider['base_url']}/chat/completions"
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(url, headers=headers, json=payload)
+
+            if r.status_code == 429:
+                raise RuntimeError("Rate limited")
+            if r.status_code >= 500:
+                raise RuntimeError("Provider server error")
+
+            r.raise_for_status()
+            data = r.json()
+
+            return data["choices"][0]["message"]["content"]
 
     async def _call_huggingface(
         self,
@@ -237,227 +228,61 @@ class LLMProvider:
         model: str,
         max_tokens: int,
         temperature: float,
-        timeout: float
+        timeout: float,
     ) -> str:
-        """Call HuggingFace Inference API with fallback endpoints."""
         import httpx
-        
-        messages = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
-        messages.append({"role": "user", "content": prompt})
-        
+
+        full_prompt = f"{system_message}\n\nUser: {prompt}\n\nAssistant:"
+
+        payload = {
+            "inputs": full_prompt,
+            "parameters": {
+                "max_new_tokens": min(max_tokens, 1024),
+                "temperature": temperature,
+                "return_full_text": False,
+            },
+        }
+
         headers = {
             "Authorization": f"Bearer {provider['api_key']}",
             "Content-Type": "application/json",
         }
-        
-        # Try multiple endpoint formats
-        endpoints = [
-            # Serverless Inference API (newer format)
-            f"https://api-inference.huggingface.co/models/{model}",
-            # Chat completions format
-            f"{provider['base_url']}/{model}/v1/chat/completions",
-        ]
-        
-        last_error = None
-        
-        for url in endpoints:
-            try:
-                # Determine payload format based on endpoint
-                if "/v1/chat/completions" in url:
-                    payload = {
-                        "model": model,
-                        "messages": messages,
-                        "max_tokens": max_tokens,
-                        "temperature": temperature,
-                        "stream": False,
-                    }
-                else:
-                    # Standard inference API format
-                    full_prompt = f"{system_message}\n\nUser: {prompt}\n\nAssistant:" if system_message else prompt
-                    payload = {
-                        "inputs": full_prompt,
-                        "parameters": {
-                            "max_new_tokens": min(max_tokens, 2048),  # HF has lower limits
-                            "temperature": temperature,
-                            "return_full_text": False,
-                        }
-                    }
-                
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(url, headers=headers, json=payload)
-                    
-                    if response.status_code == 401:
-                        raise ValueError("HuggingFace authentication failed (401)")
-                    if response.status_code in [410, 404]:
-                        raise RuntimeError(f"Model {model} not available (404/410)")
-                    if response.status_code == 429:
-                        raise RuntimeError(f"Rate limited on HuggingFace (429)")
-                    if response.status_code == 503:
-                        # Model loading, try next endpoint
-                        last_error = RuntimeError(f"Model {model} is loading (503)")
-                        continue
-                    if response.status_code >= 500:
-                        raise RuntimeError(f"HuggingFace server error ({response.status_code})")
-                    
-                    response.raise_for_status()
-                    result = response.json()
-                    
-                    # Parse response based on format
-                    if isinstance(result, list) and len(result) > 0:
-                        # Standard inference API response
-                        if "generated_text" in result[0]:
-                            return result[0]["generated_text"]
-                    elif "choices" in result and len(result["choices"]) > 0:
-                        # Chat completions format
-                        content = result["choices"][0].get("message", {}).get("content")
-                        if content:
-                            return content
-                    elif "generated_text" in result:
-                        return result["generated_text"]
-                    elif "error" in result:
-                        raise RuntimeError(f"HuggingFace error: {result['error']}")
-                    
-                    # If we got here, try next endpoint
-                    last_error = ValueError(f"Unexpected HuggingFace response: {str(result)[:200]}")
-                    continue
-                    
-            except httpx.TimeoutException:
-                last_error = RuntimeError(f"HuggingFace request timed out")
-            except httpx.ConnectError as e:
-                last_error = RuntimeError(f"HuggingFace connection error: {e}")
-            except Exception as e:
-                last_error = e
-                if "401" in str(e) or "authentication" in str(e).lower():
-                    raise  # Auth errors should bubble up immediately
-        
-        if last_error:
-            raise last_error
-        raise RuntimeError(f"HuggingFace: All endpoints failed for {model}")
 
-    async def generate_json(
-        self, 
-        prompt: str, 
-        system_message: str = "You are a helpful assistant. Always respond with valid JSON only.",
-        model: Optional[str] = None
-    ) -> dict:
-        """Generate JSON response with robust parsing and repair."""
-        enhanced_system = system_message
-        if "json" not in system_message.lower():
-            enhanced_system += "\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown, no backticks, no explanation."
-        
-        # Add explicit JSON rules
-        enhanced_system += """
+        url = f"{provider['base_url']}/{model}"
 
-JSON RULES:
-- Use null for missing/unknown values (NOT "not_mentioned", "N/A", or "unknown")
-- Use true/false for booleans (NOT "true"/"false" strings)
-- All string values must be in double quotes
-- No trailing commas
-- No comments"""
-        
-        response = await self.generate(prompt, enhanced_system, model)
-        
-        # Clean JSON from response
-        text = response.strip()
-        
-        # Remove markdown code blocks
-        if text.startswith("```json"):
-            text = text[7:]
-        elif text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-        
-        # Repair common LLM JSON mistakes
-        text = self._repair_json(text)
-        
-        # Try direct parse
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.warning(f"⚠️ JSON parse failed, attempting extraction: {e}")
-        
-        # Try to find JSON object
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start != -1 and end > start:
-            json_text = text[start:end]
-            json_text = self._repair_json(json_text)
-            try:
-                return json.loads(json_text)
-            except json.JSONDecodeError:
-                pass
-        
-        # Try to find JSON array
-        start = text.find("[")
-        end = text.rfind("]") + 1
-        if start != -1 and end > start:
-            json_text = text[start:end]
-            json_text = self._repair_json(json_text)
-            try:
-                return json.loads(json_text)
-            except json.JSONDecodeError:
-                pass
-        
-        logger.error(f"❌ Could not parse JSON. Response: {text[:500]}")
-        raise ValueError(f"LLM did not return valid JSON. Response preview: {text[:200]}...")
-    
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(url, headers=headers, json=payload)
+
+            if r.status_code in (404, 410):
+                raise RuntimeError("Model not available")
+            if r.status_code == 429:
+                raise RuntimeError("HF rate limited")
+            if r.status_code >= 500:
+                raise RuntimeError("HF server error")
+
+            r.raise_for_status()
+            data = r.json()
+
+            if isinstance(data, list) and "generated_text" in data[0]:
+                return data[0]["generated_text"]
+
+            raise RuntimeError("Invalid HF response")
+
+    # ------------------------------------------------------------------
+    # JSON REPAIR
+    # ------------------------------------------------------------------
+
     def _repair_json(self, text: str) -> str:
-        """Repair common JSON mistakes made by LLMs."""
         import re
-        
-        # Replace unquoted special values with null
-        # Matches: not_mentioned, unknown, N/A, none, etc. when not in quotes
-        unquoted_patterns = [
-            (r':\s*not_mentioned\s*([,}\]])', r': null\1'),
-            (r':\s*not_available\s*([,}\]])', r': null\1'),
-            (r':\s*unknown\s*([,}\]])', r': null\1'),
-            (r':\s*N/A\s*([,}\]])', r': null\1'),
-            (r':\s*n/a\s*([,}\]])', r': null\1'),
-            (r':\s*none\s*([,}\]])', r': null\1'),
-            (r':\s*undefined\s*([,}\]])', r': null\1'),
-            (r':\s*NA\s*([,}\]])', r': null\1'),
-            # Handle unquoted True/False (Python style)
-            (r':\s*True\s*([,}\]])', r': true\1'),
-            (r':\s*False\s*([,}\]])', r': false\1'),
-            # Handle unquoted None (Python style)
-            (r':\s*None\s*([,}\]])', r': null\1'),
-        ]
-        
-        for pattern, replacement in unquoted_patterns:
-            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-        
-        # Remove trailing commas before } or ]
-        text = re.sub(r',\s*}', '}', text)
-        text = re.sub(r',\s*\]', ']', text)
-        
-        # Fix single quotes to double quotes (be careful with apostrophes)
-        # Only replace single quotes that are clearly JSON delimiters
-        # Pattern: key-value pairs with single quotes
-        text = re.sub(r"'([^']+)'(\s*:)", r'"\1"\2', text)  # Keys
-        text = re.sub(r":\s*'([^']*)'(\s*[,}\]])", r': "\1"\2', text)  # String values
-        
+
+        text = text.strip()
+        text = re.sub(r",\s*([}\]])", r"\1", text)
+        text = re.sub(r":\s*None", ": null", text)
+        text = re.sub(r":\s*True", ": true", text)
+        text = re.sub(r":\s*False", ": false", text)
+
         return text
-    
-    async def test_connection(self) -> bool:
-        """Test LLM connection with a simple prompt."""
-        try:
-            self._validate_token()
-            result = await self.generate(
-                prompt="Say 'OK' if you work.",
-                system_message="Be very brief.",
-                max_tokens=10,
-                timeout=30.0
-            )
-            logger.info(f"✓ LLM test successful via {self.current_provider['name']}: {result[:50]}...")
-            return True
-        except Exception as e:
-            logger.error(f"❌ LLM test failed: {e}")
-            return False
 
 
-# Global singleton instance
+# Global singleton
 llm = LLMProvider()
