@@ -4,7 +4,7 @@
 
 FROM python:3.11.9-bullseye
 
-# Set working directory
+# Set working directory to /app (will contain backend code)
 WORKDIR /app
 
 # Set environment variables
@@ -50,8 +50,8 @@ print("Supabase SDK imported successfully")
 EOF
 
 
-# Copy application code
-COPY . .
+# Copy backend application code only (server.py and related modules)
+COPY backend/ .
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash appuser && \
@@ -65,5 +65,5 @@ EXPOSE 10000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT:-10000}/health || exit 1
 
-# Run the application
+# Run the application (server.py is now at /app/server.py)
 CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-10000} --log-level info"]

@@ -1,0 +1,69 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+AGENTS.md
+DEPLOYMENT.md
+PRODUCTION_CHECKLIST.md
+README.md
+
+# Frontend (not needed in backend Docker image)
+frontend/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment files (secrets should be in Render env vars)
+.env
+.env.*
+*.key
+*.pem
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+dist/
+build/
+
+# Test
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+
+# Render config
+render.yaml
+
+# Root level files not needed in backend
+design_guidelines.json
+requirements.txt

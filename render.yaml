@@ -3,7 +3,8 @@ services:
     name: duesense-backend
     runtime: docker
     plan: free
-    rootDir: backend
+    # NOTE: Root directory is empty (repo root), Dockerfile is at /Dockerfile
+    # The Dockerfile copies backend/ to /app and runs server:app
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
