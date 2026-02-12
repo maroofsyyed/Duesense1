@@ -1,47 +1,37 @@
 """
 LLM Provider for DueSense
-Production-safe multi-provider LLM with graceful fallback.
+Production-safe multi-provider LLM with graceful degradation.
 
 Provider priority:
-1. GROQ (primary – fast, reliable)
-2. Z.ai (secondary – unstable but useful)
-3. HuggingFace Inference API (last-resort fallback)
+1. GROQ (primary)
+2. Z.ai (secondary)
+
+Design goals:
+- Never crash production
+- Never spam retries
+- Never rely on unstable free HF models
+- Always return deterministic output
 """
 
 import os
 import json
-import asyncio
 import logging
-from typing import Optional, Dict, Any
-from dotenv import load_dotenv
+from typing import Optional, Dict, Any, List
 
-load_dotenv()
+import httpx
 
 logger = logging.getLogger(__name__)
 
-# HARD concurrency limit to avoid rate-limit storms
-LLM_SEMAPHORE = asyncio.Semaphore(2)
-
 
 class LLMProvider:
-    """
-    Production-safe multi-provider LLM with automatic fallback.
-
-    Guarantees:
-    - No fatal crashes
-    - No invalid HF models
-    - Rate-limit safe
-    - Deterministic provider order
-    """
-
     def __init__(self):
-        self.z_api_key = os.getenv("Z_API_KEY")
+        # Load API keys
         self.groq_api_key = os.getenv("GROQ_API_KEY")
-        self.hf_token = os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_TOKEN")
+        self.z_api_key = os.getenv("Z_API_KEY")
 
-        self.providers = []
+        self.providers: List[Dict[str, Any]] = []
 
-        # 1️⃣ GROQ (PRIMARY)
+        # --- GROQ (PRIMARY) ---
         if self.groq_api_key:
             self.providers.append({
                 "name": "groq",
@@ -53,7 +43,7 @@ class LLMProvider:
             })
             logger.info("✓ GROQ provider configured")
 
-        # 2️⃣ Z.ai (SECONDARY)
+        # --- Z.AI (SECONDARY) ---
         if self.z_api_key:
             self.providers.append({
                 "name": "z.ai",
@@ -64,34 +54,29 @@ class LLMProvider:
             })
             logger.info("✓ Z.ai provider configured")
 
-        # 3️⃣ HuggingFace (LAST RESORT – SAFE MODELS ONLY)
-        if self.hf_token:
-            self.providers.append({
-                "name": "huggingface",
-                "type": "huggingface",
-                "api_key": self.hf_token,
-                "base_url": "https://api-inference.huggingface.co/models",
-                "model": "google/flan-t5-xl",
-                "fallback_models": ["google/flan-t5-large"],
-            })
-            logger.info("✓ HuggingFace provider configured")
-
         if not self.providers:
+            logger.error("❌ No LLM providers configured")
             raise RuntimeError(
-                "No LLM providers configured. Set GROQ_API_KEY, Z_API_KEY, or HUGGINGFACE_API_KEY."
+                "Set at least one of GROQ_API_KEY or Z_API_KEY"
             )
 
         self.current_provider = self.providers[0]
         self.current_model = self.current_provider["model"]
 
         logger.info(
-            f"✓ LLM configured with providers: {', '.join(p['name'] for p in self.providers)}"
+            "✓ LLM configured with providers: %s",
+            ", ".join(p["name"] for p in self.providers),
         )
 
     # ------------------------------------------------------------------
-    # PUBLIC API
+    # Backward compatibility (server.py expects this)
     # ------------------------------------------------------------------
+    def _validate_token(self):
+        return True
 
+    # ------------------------------------------------------------------
+    # TEXT GENERATION
+    # ------------------------------------------------------------------
     async def generate(
         self,
         prompt: str,
@@ -102,93 +87,62 @@ class LLMProvider:
         timeout: float = 60.0,
     ) -> str:
         """
-        Generate text with automatic fallback.
-        NEVER throws fatal errors in production.
+        Generate text with strict retry limits and graceful fallback.
         """
-
-        last_error = None
+        last_error: Optional[Exception] = None
+        attempts = 0
+        MAX_ATTEMPTS = 2
 
         for provider in self.providers:
             models = [model or provider["model"]]
             models += provider.get("fallback_models", [])
 
             for m in models:
+                attempts += 1
+                if attempts > MAX_ATTEMPTS:
+                    break
+
                 try:
-                    async with LLM_SEMAPHORE:
-                        logger.info(f"🤖 LLM call via {provider['name']} ({m})")
+                    logger.info(f"🤖 LLM call via {provider['name']} ({m})")
+                    result = await self._call_openai_compatible(
+                        provider=provider,
+                        model=m,
+                        prompt=prompt,
+                        system_message=system_message,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        timeout=timeout,
+                    )
 
-                        if provider["type"] == "openai":
-                            result = await self._call_openai(
-                                provider, prompt, system_message, m,
-                                max_tokens, temperature, timeout
-                            )
-                        else:
-                            result = await self._call_huggingface(
-                                provider, prompt, system_message, m,
-                                max_tokens, temperature, timeout
-                            )
-
-                    if result:
-                        self.current_provider = provider
-                        self.current_model = m
-                        logger.info(f"✓ LLM response from {provider['name']} ({len(result)} chars)")
-                        return result
+                    self.current_provider = provider
+                    self.current_model = m
+                    logger.info(f"✓ LLM response from {provider['name']} ({len(result)} chars)")
+                    return result
 
                 except Exception as e:
                     last_error = e
                     logger.warning(
-                        f"⚠️ {provider['name']} ({m}) failed: {type(e).__name__}: {str(e)[:120]}"
+                        f"⚠️ {provider['name']} ({m}) failed: {type(e).__name__}: {str(e)[:200]}"
                     )
-                    # model-specific failure → try next model
-                    if "model" in str(e).lower() or "404" in str(e):
-                        continue
-                    # provider-level failure → move to next provider
-                    break
+                    break  # move to next provider
 
         logger.error(f"❌ All LLM providers failed. Last error: {last_error}")
-        return "LLM temporarily unavailable. Proceeding with partial analysis."
-
-    async def generate_json(
-        self,
-        prompt: str,
-        system_message: str = "Return ONLY valid JSON.",
-        model: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Generate JSON safely with repair logic.
-        """
-
-        system_message += (
-            "\n\nRULES:\n"
-            "- JSON only\n"
-            "- Use null for missing values\n"
-            "- No markdown\n"
-            "- No trailing commas"
-        )
-
-        text = await self.generate(prompt, system_message, model)
-
-        try:
-            return json.loads(self._repair_json(text))
-        except Exception:
-            logger.error("❌ JSON parse failed")
-            return {}
+        return self._safe_text_fallback()
 
     # ------------------------------------------------------------------
-    # PROVIDER IMPLEMENTATIONS
+    # OPENAI-COMPATIBLE CALL (Groq / Z.ai)
     # ------------------------------------------------------------------
-
-    async def _call_openai(
+    async def _call_openai_compatible(
         self,
         provider: Dict[str, Any],
+        model: str,
         prompt: str,
         system_message: str,
-        model: str,
         max_tokens: int,
         temperature: float,
         timeout: float,
     ) -> str:
-        import httpx
+        url = f"{provider['base_url']}/chat/completions"
 
         payload = {
             "model": model,
@@ -205,83 +159,70 @@ class LLMProvider:
             "Content-Type": "application/json",
         }
 
-        url = f"{provider['base_url']}/chat/completions"
-
         async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(url, headers=headers, json=payload)
+            response = await client.post(url, json=payload, headers=headers)
 
-            if r.status_code == 429:
+            if response.status_code == 429:
                 raise RuntimeError("Rate limited")
-            if r.status_code >= 500:
+            if response.status_code >= 500:
                 raise RuntimeError("Provider server error")
+            if response.status_code == 401:
+                raise RuntimeError("Invalid API key")
 
-            r.raise_for_status()
-            data = r.json()
+            response.raise_for_status()
+            data = response.json()
 
-            return data["choices"][0]["message"]["content"]
+            try:
+                return data["choices"][0]["message"]["content"]
+            except Exception:
+                raise RuntimeError("Malformed LLM response")
 
-    async def _call_huggingface(
+    # ------------------------------------------------------------------
+    # JSON GENERATION (SAFE)
+    # ------------------------------------------------------------------
+    async def generate_json(
         self,
-        provider: Dict[str, Any],
         prompt: str,
-        system_message: str,
-        model: str,
-        max_tokens: int,
-        temperature: float,
-        timeout: float,
-    ) -> str:
-        import httpx
+        system_message: str = "Respond with valid JSON only.",
+        model: Optional[str] = None,
+    ) -> dict:
+        text = await self.generate(
+            prompt=prompt,
+            system_message=system_message,
+            model=model,
+        )
 
-        full_prompt = f"{system_message}\n\nUser: {prompt}\n\nAssistant:"
-
-        payload = {
-            "inputs": full_prompt,
-            "parameters": {
-                "max_new_tokens": min(max_tokens, 1024),
-                "temperature": temperature,
-                "return_full_text": False,
-            },
-        }
-
-        headers = {
-            "Authorization": f"Bearer {provider['api_key']}",
-            "Content-Type": "application/json",
-        }
-
-        url = f"{provider['base_url']}/{model}"
-
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(url, headers=headers, json=payload)
-
-            if r.status_code in (404, 410):
-                raise RuntimeError("Model not available")
-            if r.status_code == 429:
-                raise RuntimeError("HF rate limited")
-            if r.status_code >= 500:
-                raise RuntimeError("HF server error")
-
-            r.raise_for_status()
-            data = r.json()
-
-            if isinstance(data, list) and "generated_text" in data[0]:
-                return data[0]["generated_text"]
-
-            raise RuntimeError("Invalid HF response")
+        try:
+            return json.loads(self._extract_json(text))
+        except Exception:
+            logger.error("❌ JSON parse failed – returning safe defaults")
+            return {
+                "status": "partial",
+                "reason": "llm_unavailable",
+            }
 
     # ------------------------------------------------------------------
-    # JSON REPAIR
+    # HELPERS
     # ------------------------------------------------------------------
-
-    def _repair_json(self, text: str) -> str:
-        import re
-
+    def _extract_json(self, text: str) -> str:
         text = text.strip()
-        text = re.sub(r",\s*([}\]])", r"\1", text)
-        text = re.sub(r":\s*None", ": null", text)
-        text = re.sub(r":\s*True", ": true", text)
-        text = re.sub(r":\s*False", ": false", text)
 
-        return text
+        if text.startswith("```"):
+            text = text.strip("```").strip()
+
+        start = text.find("{")
+        end = text.rfind("}") + 1
+
+        if start != -1 and end > start:
+            return text[start:end]
+
+        raise ValueError("No JSON object found")
+
+    def _safe_text_fallback(self) -> str:
+        return (
+            "The analysis could not be fully completed due to temporary "
+            "LLM unavailability. Partial results may be shown."
+        )
 
 
 # Global singleton
