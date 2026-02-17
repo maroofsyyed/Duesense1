@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Utility wrapper for full-screen shader demo */
+.shader-page {
+  @apply min-h-screen bg-bg text-text-primary flex items-center justify-center;
+}
+
+
 @import url('https://fonts.googleapis.com/css2?family=Chivo:wght@400;700;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
 * {
