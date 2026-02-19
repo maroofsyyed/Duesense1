@@ -39,7 +39,7 @@ class LLMProvider:
     def current_model(self) -> str:
         modes = []
         if self.zai_api_key: modes.append("gpt-4o")
-        if self.sarvam_api_key: modes.append("sarvam-2b")
+        if self.sarvam_api_key: modes.append("sarvam-m")
         return " + ".join(modes)
 
     def _validate_token(self):
@@ -190,8 +190,8 @@ class LLMProvider:
         max_tokens: int,
         temperature: float,
     ) -> str:
-        # Sarvam 'sarvam-2b' is the standard model
-        model = "sarvam-2b"
+        # Valid models: sarvam-m (2B), sarvam-30b, sarvam-105b
+        model = "sarvam-m"
 
         # Clamp max_tokens to 1024 for Sarvam models (typical limit)
         safe_max_tokens = min(max_tokens, 1024)
