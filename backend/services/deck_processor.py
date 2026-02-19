@@ -65,13 +65,16 @@ async def extract_deck(file_path: str, file_ext: str) -> dict:
         # Validate extraction — company name must exist
         company_name = structured.get("company", {}).get("name")
         if not company_name or company_name in ("", "Unknown", "Unknown Company", "null"):
-            logger.warning("⚠️ Company name not extracted — retrying with simplified prompt...")
+            logger.warning("⚠️ Company name not extracted — retrying extraction...")
             structured = await _structure_with_llm(text)
             company_name = structured.get("company", {}).get("name")
 
         if not company_name or company_name in ("", "Unknown", "Unknown Company", "null"):
             logger.error("❌ Company name still not extracted after retry")
-            # Still return what we have — partial data is better than nothing
+            raise ValueError(
+                "Could not identify company name from the deck. "
+                "Please ensure the company name is clearly mentioned in the slides."
+            )
         else:
             logger.info(f"✓ Extracted company: {company_name}")
 

@@ -38,6 +38,11 @@ async def enrich_company(company_id: str, extracted_data: dict) -> dict:
     industry = company_info.get("industry", "")
     product_desc = extracted_data.get("solution", {}).get("product_description", "")
 
+    # Guard: skip name-dependent enrichment if no company name extracted
+    has_company_name = bool(company_name and company_name not in ("Unknown", "Unknown Company", "", "null"))
+    if not has_company_name:
+        logger.warning("[Enrichment] No company name — skipping name-dependent enrichment tasks")
+
     # Extract founder LinkedIn URLs from extracted data
     founders = extracted_data.get("founders", [])
     founder_linkedin_urls = [
@@ -52,25 +57,30 @@ async def enrich_company(company_id: str, extracted_data: dict) -> dict:
         parsed = urlparse(website if "://" in website else f"https://{website}")
         company_domain = parsed.netloc.replace("www.", "")
 
-    tasks = {
-        "github": _enrich_github(company_id, company_name),
-        "news": _enrich_news(company_id, company_name),
-        "competitors": _enrich_competitors(company_id, company_name, product_desc),
-        "market": _enrich_market(company_id, industry),
-        "linkedin": _enrich_linkedin(
+    tasks = {}
+
+    # Name-dependent tasks — only run if we have a company name
+    if has_company_name:
+        tasks["github"] = _enrich_github(company_id, company_name)
+        tasks["news"] = _enrich_news(company_id, company_name)
+        tasks["competitors"] = _enrich_competitors(company_id, company_name, product_desc)
+        tasks["market"] = _enrich_market(company_id, industry)
+        tasks["linkedin"] = _enrich_linkedin(
             company_id, company_name, company_domain, founder_linkedin_urls
-        ),
-        "founder_profiles": _enrich_founder_profiles(
-            company_id, founders, company_domain
-        ),
-        "social_signals": _enrich_social_signals(
+        )
+        tasks["social_signals"] = _enrich_social_signals(
             company_id, company_name, company_domain
-        ),
-        "glassdoor": _enrich_glassdoor(company_id, company_name),
-        "company_profile": _enrich_company_profile(
+        )
+        tasks["glassdoor"] = _enrich_glassdoor(company_id, company_name)
+        tasks["company_profile"] = _enrich_company_profile(
             company_id, company_name, company_domain, extracted_data
-        ),
-    }
+        )
+
+    # Founder profiles — can run even without company name if we have LinkedIn URLs
+    if founders:
+        tasks["founder_profiles"] = _enrich_founder_profiles(
+            company_id, founders, company_domain
+        )
 
     if website:
         tasks["website"] = _enrich_website(company_id, website)
