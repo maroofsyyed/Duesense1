@@ -234,6 +234,216 @@ class ScraperClient:
                 return {"error": str(e)}
 
 
+class EnrichlyrClient:
+    """
+    Primary enrichment API client for DueSense v2.0.
+
+    Covers: LinkedIn profiles, funding history, web traffic, social signals.
+    All methods return {} or {"error": ...} on failure — never raise.
+    """
+
+    BASE_URL = "https://api.enrichlyer.com"
+
+    def __init__(self):
+        self.api_key = os.environ.get("ENRICHLYER_API_KEY")
+        self.base_url = self.BASE_URL
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        } if self.api_key else {}
+        self.timeout = 20.0
+
+    # ── Generic helpers ───────────────────────────────────────────────────
+
+    async def _get(self, path: str, params: dict = None) -> dict:
+        """Generic GET with error handling for 404/429."""
+        if not self.api_key:
+            return {"error": "ENRICHLYER_API_KEY not configured"}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                r = await client.get(
+                    f"{self.base_url}{path}",
+                    headers=self.headers,
+                    params=params or {},
+                )
+                if r.status_code == 200:
+                    return r.json()
+                elif r.status_code == 404:
+                    return {"found": False, "status": 404}
+                elif r.status_code == 429:
+                    return {"error": "rate_limited", "retry_after": r.headers.get("Retry-After")}
+                else:
+                    return {"error": f"HTTP {r.status_code}", "body": r.text[:200]}
+            except Exception as e:
+                return {"error": str(e)}
+
+    async def _post(self, path: str, body: dict) -> dict:
+        """Generic POST with error handling."""
+        if not self.api_key:
+            return {"error": "ENRICHLYER_API_KEY not configured"}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                r = await client.post(
+                    f"{self.base_url}{path}",
+                    headers=self.headers,
+                    json=body,
+                )
+                if r.status_code in (200, 201):
+                    return r.json()
+                return {"error": f"HTTP {r.status_code}", "body": r.text[:200]}
+            except Exception as e:
+                return {"error": str(e)}
+
+    # ── Company LinkedIn (existing — backward compatible) ─────────────────
+
+    async def get_company_profile(self, domain: str) -> dict:
+        """Fetch company profile by domain (resolve → full profile)."""
+        resolve_data = await self._get(
+            "/api/linkedin/company/resolve",
+            params={"company_domain": domain},
+        )
+        if "error" in resolve_data or resolve_data.get("found") is False:
+            return resolve_data if "error" in resolve_data else {
+                "error": f"No LinkedIn URL found for {domain}"
+            }
+        li_url = resolve_data.get("url")
+        if not li_url:
+            return {"error": f"No LinkedIn URL found for {domain}"}
+
+        return await self._get(
+            "/api/linkedin/company",
+            params={"url": li_url, "use_cache": "if-present"},
+        )
+
+    async def get_company_linkedin(self, company_name: str, website: str = None) -> dict:
+        """
+        Fetch LinkedIn company profile (spec method).
+        Tries by website domain first, then by name search.
+        Returns: followers, employee_count, specialties, job_postings
+        """
+        if website:
+            domain = website.replace("https://", "").replace("http://", "").split("/")[0]
+            result = await self.get_company_profile(domain)
+            if "error" not in result and result.get("found") is not False:
+                return result
+
+        # Fallback to name search
+        return await self._post("/linkedin/company/search", {"name": company_name})
+
+    # ── Person LinkedIn (existing — backward compatible) ──────────────────
+
+    async def get_person_profile(self, linkedin_url: str) -> dict:
+        """Fetch person LinkedIn profile by URL."""
+        return await self._get(
+            "/api/v2/linkedin",
+            params={
+                "linkedin_profile_url": linkedin_url,
+                "use_cache": "if-present",
+                "skills": "include",
+                "personal_email": "exclude",
+                "personal_contact_number": "exclude",
+            },
+        )
+
+    async def get_person_linkedin(self, name: str, company: str = None,
+                                   linkedin_url: str = None) -> dict:
+        """
+        Fetch LinkedIn person profile (spec method).
+        If linkedin_url provided, uses direct lookup. Otherwise searches by name.
+        Returns: positions, education, skills, connections, prior_exits
+        """
+        if linkedin_url:
+            return await self.get_person_profile(linkedin_url)
+
+        return await self._post("/linkedin/person/search", {
+            "name": name,
+            "current_company": company,
+        })
+
+    async def resolve_person(self, first_name: str, company_domain: str) -> dict:
+        """Resolve a person to their LinkedIn profile URL."""
+        return await self._get(
+            "/api/linkedin/profile/resolve",
+            params={
+                "first_name": first_name,
+                "company_domain": company_domain,
+                "similarity_checks": "include",
+            },
+        )
+
+    async def search_employees(self, company_linkedin_url: str, keyword: str) -> dict:
+        """Search employees at a company by title keyword."""
+        return await self._get(
+            "/api/linkedin/company/employees/search",
+            params={
+                "linkedin_company_profile_url": company_linkedin_url,
+                "keyword_regex": keyword,
+                "page_size": "2",
+            },
+        )
+
+    async def get_company_social(self, domain: str) -> dict:
+        """Fetch company social signals (followers, employee count, etc.)."""
+        profile = await self.get_company_profile(domain)
+        if "error" in profile:
+            return profile
+        return {
+            "follower_count": profile.get("follower_count", 0),
+            "employee_count": profile.get("company_size_on_linkedin", 0),
+            "industry": profile.get("industry"),
+            "specialities": profile.get("specialities", []),
+            "is_hiring": bool(profile.get("hiring_state")),
+            "linkedin_url": profile.get("linkedin_internal_id"),
+        }
+
+    # ── Funding History (NEW) ─────────────────────────────────────────────
+
+    async def get_funding_history(self, company_name: str, website: str = None) -> dict:
+        """
+        Fetch all funding rounds.
+        Returns: rounds[], total_raised, investors, post_money_valuations
+        """
+        params = {"name": company_name}
+        if website:
+            domain = website.replace("https://", "").replace("http://", "").split("/")[0]
+            params["domain"] = domain
+        return await self._get("/funding", params=params)
+
+    # ── Web Traffic (NEW) ─────────────────────────────────────────────────
+
+    async def get_web_traffic(self, domain: str) -> dict:
+        """
+        Fetch web traffic estimates.
+        Returns: monthly_visits, sources, keywords, domain_authority
+        """
+        clean = domain.replace("https://", "").replace("http://", "").split("/")[0]
+        return await self._get("/traffic", params={"domain": clean})
+
+    # ── Social Signals (NEW) ──────────────────────────────────────────────
+
+    async def get_social_signals(self, company_name: str, website: str = None) -> dict:
+        """
+        Fetch social media presence signals.
+        Returns: linkedin_followers, twitter_followers, growth rates
+        """
+        params = {"name": company_name}
+        if website:
+            params["website"] = website
+        return await self._get("/social", params=params)
+
+    # ── Company Search (NEW) ──────────────────────────────────────────────
+
+    async def search_company(self, query: str) -> list:
+        """
+        Search for company data (used for competitive landscape).
+        Returns: list of company profiles
+        """
+        result = await self._post("/company/search", {"query": query, "limit": 5})
+        if isinstance(result, dict) and "error" in result:
+            return []
+        return result.get("results", result.get("companies", []))
+
+
 def _simple_sentiment(text: str) -> str:
     text_lower = text.lower()
     pos = ["success", "growth", "raised", "funding", "launch", "partnership", "award", "revenue", "profitable"]

@@ -31,14 +31,17 @@ def get_enrichment_col():
     """Get enrichment sources table (lazy)."""
     return database.enrichment_collection()
 
-# Updated scoring weights
+# v2.0 scoring weights (9 dimensions, total = 100)
 SCORING_WEIGHTS = {
-    "founder_quality": 25,
-    "market_opportunity": 20,
-    "technical_moat": 20,
-    "traction": 15,
-    "business_model": 10,
-    "website_intelligence": 10,
+    "founder_quality": 22,
+    "market_opportunity": 18,
+    "technical_moat": 18,
+    "traction": 13,
+    "business_model": 9,
+    "website_intelligence": 8,
+    "linkedin_enrichment": 5,
+    "funding_quality": 4,
+    "web_growth_signals": 3,
 }
 
 
@@ -97,6 +100,131 @@ async def _agent_website_intelligence(enrichment: dict) -> dict:
         "one_line_verdict": summary.get("one_line_verdict", ""),
         "reasoning": summary.get("one_line_verdict", ""),
         "confidence": "HIGH" if overall > 70 else "MEDIUM" if overall > 40 else "LOW",
+    }
+
+
+async def _agent_linkedin_enrichment(enrichment: dict) -> dict:
+    """Score LinkedIn enrichment quality (0-5)."""
+    li_data = enrichment.get("linkedin_enrichment", {})
+    if not li_data or "error" in li_data:
+        return {"total_linkedin_score": 0, "reasoning": "No LinkedIn data", "confidence": "LOW"}
+
+    score = 0.0
+    reasons = []
+
+    # Founder prior exits (up to 2 pts)
+    founders = li_data.get("founders", li_data.get("found_profiles", []))
+    if isinstance(founders, list):
+        exits = sum(1 for f in founders if isinstance(f, dict) and f.get("prior_exits"))
+        if exits > 0:
+            score += min(2.0, exits * 1.0)
+            reasons.append(f"{exits} founder(s) with prior exits")
+
+    # Connections / network strength (up to 1 pt)
+    company_followers = li_data.get("follower_count", 0)
+    if company_followers and company_followers > 10000:
+        score += 1.0
+        reasons.append(f"{company_followers:,} LinkedIn followers")
+    elif company_followers and company_followers > 1000:
+        score += 0.5
+
+    # Education quality (up to 1 pt)
+    top_tier = sum(1 for f in (founders if isinstance(founders, list) else [])
+                   if isinstance(f, dict) and f.get("education_top_tier"))
+    if top_tier > 0:
+        score += 1.0
+        reasons.append(f"{top_tier} founder(s) with top-tier education")
+
+    # Employee count / growth (up to 1 pt)
+    emp_count = li_data.get("employee_count", 0)
+    if emp_count and emp_count > 50:
+        score += 1.0
+        reasons.append(f"{emp_count} employees on LinkedIn")
+    elif emp_count and emp_count > 10:
+        score += 0.5
+
+    return {
+        "total_linkedin_score": min(5.0, round(score, 1)),
+        "reasoning": "; ".join(reasons) if reasons else "LinkedIn data available but limited signals",
+        "confidence": "HIGH" if score >= 3 else "MEDIUM" if score >= 1 else "LOW",
+    }
+
+
+async def _agent_funding_quality(enrichment: dict) -> dict:
+    """Score funding quality from investor tier and round history (0-4)."""
+    funding = enrichment.get("funding_history", {})
+    if not funding or "error" in funding:
+        return {"total_funding_score": 0, "reasoning": "No funding data", "confidence": "LOW"}
+
+    score = 0.0
+    reasons = []
+
+    # Investor tier score (up to 2 pts, scaled from 0-10)
+    tier_score = funding.get("investor_tier_score", 0)
+    if tier_score:
+        score += min(2.0, tier_score / 5.0)
+        if tier_score >= 5:
+            reasons.append(f"High-quality investors (tier {tier_score}/10)")
+
+    # Total raised (up to 1 pt)
+    total = funding.get("total_raised_usd", 0)
+    if total >= 10_000_000:
+        score += 1.0
+        reasons.append(f"${total:,.0f} total raised")
+    elif total >= 1_000_000:
+        score += 0.5
+
+    # Funding velocity — multiple rounds (up to 1 pt)
+    rounds = funding.get("all_rounds", [])
+    if len(rounds) >= 3:
+        score += 1.0
+        reasons.append(f"{len(rounds)} funding rounds")
+    elif len(rounds) >= 2:
+        score += 0.5
+
+    return {
+        "total_funding_score": min(4.0, round(score, 1)),
+        "reasoning": "; ".join(reasons) if reasons else "Funding data available",
+        "confidence": "HIGH" if score >= 2.5 else "MEDIUM" if score >= 1 else "LOW",
+    }
+
+
+async def _agent_web_growth_signals(enrichment: dict) -> dict:
+    """Score web and social growth signals (0-3)."""
+    traffic = enrichment.get("web_traffic", {})
+    social = enrichment.get("social_signals", {})
+
+    score = 0.0
+    reasons = []
+
+    # Web traffic trend (up to 1.5 pts)
+    visits = traffic.get("monthly_visits")
+    if visits and visits > 100_000:
+        score += 1.5
+        reasons.append(f"{visits:,} monthly visits")
+    elif visits and visits > 10_000:
+        score += 1.0
+        reasons.append(f"{visits:,} monthly visits")
+    elif visits and visits > 1_000:
+        score += 0.5
+
+    trend = traffic.get("monthly_visits_trend")
+    if trend == "UP":
+        score += 0.5
+        reasons.append("Traffic trending up")
+
+    # Social presence (up to 1 pt)
+    social_score = social.get("social_presence_score", 0)
+    if social_score and social_score >= 7:
+        score += 1.0
+        reasons.append(f"Strong social presence ({social_score}/10)")
+    elif social_score and social_score >= 4:
+        score += 0.5
+
+    return {
+        "total_web_growth_score": min(3.0, round(score, 1)),
+        "reasoning": "; ".join(reasons) if reasons else "Limited web/social data",
+        "confidence": "HIGH" if score >= 2 else "MEDIUM" if score >= 1 else "LOW",
     }
 
 
@@ -286,7 +414,7 @@ async def _agent_website_due_diligence(enrichment: dict) -> dict:
 
 
 async def calculate_investment_score(company_id: str, extracted: dict, enrichment: dict) -> dict:
-    """Run all agents in parallel and compile final score."""
+    """Run all scoring agents in parallel and compile final score (9 dimensions)."""
 
     # Fetch website DD enrichment from Supabase
     website_dd_enrichment = None
@@ -297,33 +425,48 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
         website_dd_enrichment = website_dd_row.get("data", {})
 
     results = await asyncio.gather(
-        agent_founder_quality(extracted, enrichment),
-        agent_market_opportunity(extracted, enrichment),
-        agent_technical_moat(extracted, enrichment),
-        agent_traction(extracted, enrichment),
-        agent_business_model(extracted, enrichment),
-        _agent_website_intelligence(enrichment),
-        _agent_website_due_diligence(website_dd_enrichment if website_dd_enrichment else {}),
+        agent_founder_quality(extracted, enrichment),           # 0
+        agent_market_opportunity(extracted, enrichment),        # 1
+        agent_technical_moat(extracted, enrichment),            # 2
+        agent_traction(extracted, enrichment),                  # 3
+        agent_business_model(extracted, enrichment),            # 4
+        _agent_website_intelligence(enrichment),                # 5
+        _agent_website_due_diligence(website_dd_enrichment if website_dd_enrichment else {}),  # 6
+        _agent_linkedin_enrichment(enrichment),                 # 7
+        _agent_funding_quality(enrichment),                     # 8
+        _agent_web_growth_signals(enrichment),                  # 9
         return_exceptions=True,
     )
 
-    founder_result = results[0] if not isinstance(results[0], Exception) else {}
-    market_result = results[1] if not isinstance(results[1], Exception) else {}
-    moat_result = results[2] if not isinstance(results[2], Exception) else {}
-    traction_result = results[3] if not isinstance(results[3], Exception) else {}
-    model_result = results[4] if not isinstance(results[4], Exception) else {}
-    website_result = results[5] if not isinstance(results[5], Exception) else {}
-    website_dd_result = results[6] if not isinstance(results[6], Exception) else {}
+    def _safe(idx): return results[idx] if not isinstance(results[idx], Exception) else {}
 
-    # Apply updated weights
-    founder_score = min(25, max(0, float(founder_result.get("total_founder_score", 12)) * (25 / 30)))
-    market_score = min(20, max(0, float(market_result.get("total_market_score", 10))))
-    moat_score = min(20, max(0, float(moat_result.get("total_moat_score", 10))))
-    traction_score = min(15, max(0, float(traction_result.get("total_traction_score", 8)) * (15 / 20)))
-    model_score_val = min(10, max(0, float(model_result.get("total_model_score", 5))))
-    website_score = min(10, max(0, float(website_result.get("total_website_score", 5))))
+    founder_result = _safe(0)
+    market_result = _safe(1)
+    moat_result = _safe(2)
+    traction_result = _safe(3)
+    model_result = _safe(4)
+    website_result = _safe(5)
+    website_dd_result = _safe(6)
+    linkedin_result = _safe(7)
+    funding_result = _safe(8)
+    web_growth_result = _safe(9)
 
-    total = founder_score + market_score + moat_score + traction_score + model_score_val + website_score
+    # Apply v2.0 weights (22/18/18/13/9/8/5/4/3 = 100)
+    founder_score = min(22, max(0, float(founder_result.get("total_founder_score", 11)) * (22 / 30)))
+    market_score = min(18, max(0, float(market_result.get("total_market_score", 9)) * (18 / 20)))
+    moat_score = min(18, max(0, float(moat_result.get("total_moat_score", 9)) * (18 / 20)))
+    traction_score = min(13, max(0, float(traction_result.get("total_traction_score", 7)) * (13 / 20)))
+    model_score_val = min(9, max(0, float(model_result.get("total_model_score", 5)) * (9 / 10)))
+    website_score = min(8, max(0, float(website_result.get("total_website_score", 4)) * (8 / 10)))
+    linkedin_score = min(5, max(0, float(linkedin_result.get("total_linkedin_score", 0))))
+    funding_score = min(4, max(0, float(funding_result.get("total_funding_score", 0))))
+    web_growth_score = min(3, max(0, float(web_growth_result.get("total_web_growth_score", 0))))
+
+    total = (
+        founder_score + market_score + moat_score + traction_score
+        + model_score_val + website_score + linkedin_score
+        + funding_score + web_growth_score
+    )
     tier = _classify_tier(total)
 
     confidences = [
@@ -334,9 +477,12 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
         model_result.get("confidence", "MEDIUM"),
         website_result.get("confidence", "MEDIUM"),
         website_dd_result.get("confidence", "MEDIUM"),
+        linkedin_result.get("confidence", "MEDIUM"),
+        funding_result.get("confidence", "MEDIUM"),
+        web_growth_result.get("confidence", "MEDIUM"),
     ]
     high_count = confidences.count("HIGH")
-    confidence = "HIGH" if high_count >= 4 else "LOW" if high_count == 0 else "MEDIUM"
+    confidence = "HIGH" if high_count >= 5 else "LOW" if high_count <= 1 else "MEDIUM"
 
     thesis = await _generate_thesis(extracted, total, tier, founder_result, market_result, moat_result, traction_result, model_result, website_result, website_dd_result)
 
@@ -353,6 +499,12 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
         "model_score": round(model_score_val, 1),
         "website_score": round(website_score, 1),
         "website_dd_score": round(float(website_dd_result.get("total_website_dd_score", 0)), 1),
+        "linkedin_score": round(linkedin_score, 1),
+        "funding_quality_score": round(funding_score, 1),
+        "web_growth_score": round(web_growth_score, 1),
+        "social_presence_score": round(
+            float(enrichment.get("social_signals", {}).get("social_presence_score", 0)), 1
+        ),
         "scoring_weights": SCORING_WEIGHTS,
         "agent_details": {
             "founder": founder_result,
@@ -362,6 +514,9 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
             "business_model": model_result,
             "website_intelligence": website_result,
             "website_due_diligence": website_dd_result,
+            "linkedin_enrichment": linkedin_result,
+            "funding_quality": funding_result,
+            "web_growth_signals": web_growth_result,
         },
         "recommendation": thesis.get("recommendation", ""),
         "investment_thesis": thesis.get("investment_thesis", ""),

@@ -58,3 +58,6 @@ temp/
 htmlcov/
 .pytest_cache/
 backend/.env
+
+# Claude Code local settings
+.claude/settings.local.json

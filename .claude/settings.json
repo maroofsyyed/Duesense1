@@ -1,0 +1,24 @@
+{
+    "permissions": {
+        "allow": [
+            "Read project files",
+            "Edit source code",
+            "Run development servers",
+            "Run tests",
+            "Install npm packages",
+            "Install pip packages"
+        ],
+        "deny": [
+            "Delete .env files",
+            "Modify .git directory",
+            "Push to remote repositories",
+            "Access production databases",
+            "Modify deployment configs without approval"
+        ]
+    },
+    "preferences": {
+        "planBeforeBuild": true,
+        "verifyAfterBuild": true,
+        "maxFileEditSize": 500
+    }
+}

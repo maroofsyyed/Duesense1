@@ -29,6 +29,8 @@ Pillow>=10.2.0,<12.2.0
 # ============ LLM Providers ============
 # HuggingFace Inference API (open-source models)
 huggingface-hub>=0.20.0,<0.30.0
+# Anthropic Claude (Kruncher Insights)
+anthropic>=0.25.0,<1.0.0
 
 # ============ SSL/TLS ============
 certifi>=2024.2.2
