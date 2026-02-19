@@ -1,7 +1,7 @@
 """
 Social Signals Agent — Aggregates social media presence and engagement.
 
-- LinkedIn company followers + growth rate (via Enrichlyer)
+- LinkedIn company followers + growth rate (via Enrichlayer)
 - Twitter/X followers + recent tweet activity (via ScraperAPI)
 - YouTube channel stats if applicable
 - GitHub stars, forks, contributor count (enhances existing GitHubClient)
@@ -179,9 +179,9 @@ class SocialSignalsAgent:
     # ─── LinkedIn Company Signals ─────────────────────────────────────
 
     async def _linkedin_company_signals(self, company_domain: str) -> dict:
-        """Fetch LinkedIn company signals via Enrichlyer."""
+        """Fetch LinkedIn company signals via Enrichlayer."""
         if not self.enrichlyr.api_key:
-            return {"found": False, "platform": "linkedin", "reason": "No Enrichlyer key"}
+            return {"found": False, "platform": "linkedin", "reason": "No Enrichlayer key"}
 
         try:
             data = await self.enrichlyr.get_company_profile(company_domain)

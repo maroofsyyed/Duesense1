@@ -25,7 +25,7 @@ services:
       - key: ENABLE_DEMO_KEY
         value: "false"
       # Enrichment APIs
-      - key: ENRICHLYER_API_KEY
+      - key: ENRICHLAYER_API_KEY
         sync: false
       - key: GITHUB_TOKEN
         sync: false

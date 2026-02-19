@@ -206,7 +206,7 @@ class CompetitiveLandscapeAgent:
             except Exception:
                 pass
 
-        # LinkedIn company data if Enrichlyer available
+        # LinkedIn company data if Enrichlayer available
         if self.enrichlyr.api_key and url:
             try:
                 from urllib.parse import urlparse
@@ -244,7 +244,7 @@ class CompetitiveLandscapeAgent:
         return None
 
     async def _get_linkedin_info(self, domain: str) -> Optional[dict]:
-        """Get LinkedIn company info via Enrichlyer."""
+        """Get LinkedIn company info via Enrichlayer."""
         try:
             data = await self.enrichlyr.get_company_profile(domain)
             if "error" not in data:

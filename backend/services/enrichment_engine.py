@@ -314,7 +314,7 @@ async def _enrich_company_profile(
     company_info = extracted_data.get("company", {})
     funding_info = extracted_data.get("funding", {})
 
-    # Enrichlyer company data (if available)
+    # Enrichlayer company data (if available)
     linkedin_data = {}
     try:
         from integrations.clients import EnrichlyrClient
@@ -324,7 +324,7 @@ async def _enrich_company_profile(
             if "error" not in enrichlyr_result:
                 linkedin_data = enrichlyr_result
     except Exception as e:
-        logger.warning(f"[CompanyProfile] Enrichlyer lookup failed: {e}")
+        logger.warning(f"[CompanyProfile] Enrichlayer lookup failed: {e}")
 
     # LLM synthesis to build verified profile
     prompt = f"""You are a VC analyst building a verified company profile.

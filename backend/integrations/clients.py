@@ -242,10 +242,10 @@ class EnrichlyrClient:
     All methods return {} or {"error": ...} on failure — never raise.
     """
 
-    BASE_URL = "https://api.enrichlyer.com"
+    BASE_URL = "https://api.enrichlayer.com"
 
     def __init__(self):
-        self.api_key = os.environ.get("ENRICHLYER_API_KEY")
+        self.api_key = os.environ.get("ENRICHLAYER_API_KEY")
         self.base_url = self.BASE_URL
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -258,7 +258,7 @@ class EnrichlyrClient:
     async def _get(self, path: str, params: dict = None) -> dict:
         """Generic GET with error handling for 404/429."""
         if not self.api_key:
-            return {"error": "ENRICHLYER_API_KEY not configured"}
+            return {"error": "ENRICHLAYER_API_KEY not configured"}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
                 r = await client.get(
@@ -280,7 +280,7 @@ class EnrichlyrClient:
     async def _post(self, path: str, body: dict) -> dict:
         """Generic POST with error handling."""
         if not self.api_key:
-            return {"error": "ENRICHLYER_API_KEY not configured"}
+            return {"error": "ENRICHLAYER_API_KEY not configured"}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
                 r = await client.post(

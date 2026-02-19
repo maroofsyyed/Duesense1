@@ -35,7 +35,7 @@ ALTER TABLE enrichment_sources ADD CONSTRAINT enrichment_sources_source_type_che
     'linkedin_enrichment', 'funding_history', 'web_traffic',
     'social_signals', 'market_analysis', 'gtm_analysis',
     'competitive_landscape', 'milestones', 'kruncher_insights',
-    'glassdoor', 'founder_profiles', 'enrichlyer'
+    'glassdoor', 'founder_profiles', 'enrichlayer'
   ));
 
 -- 5. Update companies status CHECK (add generating_insights)

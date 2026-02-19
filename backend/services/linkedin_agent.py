@@ -1,12 +1,12 @@
 """
-LinkedIn Enrichment Agent — Enrichlyer API
+LinkedIn Enrichment Agent — Enrichlayer API
 
 Fetches founder LinkedIn profiles and company LinkedIn data.
 Extracts:
   - Founder: current role, past companies, education, connections, skills
   - Company: employee count, follower growth, job postings, specialties
 
-Uses Enrichlyer API (api.enrichlyer.com) — ENRICHLYER_API_KEY required.
+Uses Enrichlayer API (api.enrichlayer.com) — ENRICHLAYER_API_KEY required.
 """
 import os
 import asyncio
@@ -23,13 +23,13 @@ logger = logging.getLogger(__name__)
 
 
 class LinkedInEnrichmentAgent:
-    """Fetches and structures LinkedIn data via Enrichlyer API."""
+    """Fetches and structures LinkedIn data via Enrichlayer API."""
 
     def __init__(self):
         self.client = EnrichlyrClient()
         self.api_key = self.client.api_key
         if not self.api_key:
-            logger.warning("[LinkedIn] ENRICHLYER_API_KEY not set — LinkedIn enrichment disabled")
+            logger.warning("[LinkedIn] ENRICHLAYER_API_KEY not set — LinkedIn enrichment disabled")
 
     # ─── Public Entry Point ───────────────────────────────────────────
 
@@ -45,7 +45,7 @@ class LinkedInEnrichmentAgent:
         Returns combined dict; stores each piece in enrichment_sources.
         """
         if not self.api_key:
-            return {"error": "ENRICHLYER_API_KEY not configured", "source": "linkedin"}
+            return {"error": "ENRICHLAYER_API_KEY not configured", "source": "linkedin"}
 
         tasks = {}
 
@@ -88,14 +88,14 @@ class LinkedInEnrichmentAgent:
     # ─── Person Profile ───────────────────────────────────────────────
 
     async def _enrich_person(self, company_id: str, linkedin_url: str) -> dict:
-        """Fetch a founder's LinkedIn profile via Enrichlyer Person Profile API."""
+        """Fetch a founder's LinkedIn profile via Enrichlayer Person Profile API."""
         logger.info(f"[LinkedIn] Fetching person profile: {linkedin_url}")
 
         raw = await self.client.get_person_profile(linkedin_url)
 
         if "error" in raw:
             logger.warning(f"[LinkedIn] Person API error: {raw['error']}")
-            return {"error": f"Enrichlyer person API error: {raw.get('error')}"}
+            return {"error": f"Enrichlayer person API error: {raw.get('error')}"}
 
         # Structure the output — extract what matters for VC scoring
         profile = {
@@ -167,7 +167,7 @@ class LinkedInEnrichmentAgent:
     async def _enrich_company(
         self, company_id: str, company_name: str, company_domain: str
     ) -> dict:
-        """Fetch company LinkedIn data via Enrichlyer Company Profile API."""
+        """Fetch company LinkedIn data via Enrichlayer Company Profile API."""
         logger.info(f"[LinkedIn] Fetching company profile: {company_domain}")
 
         raw = await self.client.get_company_profile(company_domain)
@@ -209,7 +209,7 @@ class LinkedInEnrichmentAgent:
         }
 
         # Store in DB
-        _store_enrichment(company_id, "linkedin_company", profile.get("linkedin_url", "enrichlyer"), profile)
+        _store_enrichment(company_id, "linkedin_company", profile.get("linkedin_url", "enrichlayer"), profile)
 
         return profile
 

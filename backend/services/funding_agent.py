@@ -45,7 +45,7 @@ class FundingHistoryAgent:
     async def _run(self, company_id, company_name, website, deck_funding) -> dict:
         logger.info(f"[FundingAgent] Starting for {company_name} ({company_id})")
 
-        # ── Fetch from Enrichlyer ─────────────────────────────────────────
+        # ── Fetch from Enrichlayer ─────────────────────────────────────────
         api_data = await self.enrichlyr.get_funding_history(company_name, website)
 
         if "error" in api_data:
@@ -113,7 +113,7 @@ class FundingHistoryAgent:
             "days_since_last_round": days_since,
             "discrepancy_with_deck": discrepancy,
             "discrepancy_details": discrepancy_details,
-            "source": "enrichlyer",
+            "source": "enrichlayer",
         }
 
         # ── Store in DB ───────────────────────────────────────────────────
@@ -163,7 +163,7 @@ class FundingHistoryAgent:
             database.enrichment_collection().insert({
                 "company_id": company_id,
                 "source_type": "funding_history",
-                "source_url": "enrichlyer",
+                "source_url": "enrichlayer",
                 "data": data,
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
                 "is_valid": True,
@@ -217,7 +217,7 @@ class FundingHistoryAgent:
         if diff_pct > 30:
             return True, (
                 f"Deck claims ${deck_total:,.0f} raised, "
-                f"Enrichlyer shows ${api_total:,.0f} ({diff_pct:.0f}% difference)"
+                f"Enrichlayer shows ${api_total:,.0f} ({diff_pct:.0f}% difference)"
             )
         return False, None
 

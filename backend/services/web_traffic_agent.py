@@ -37,7 +37,7 @@ class WebTrafficAgent:
         domain = website.replace("https://", "").replace("http://", "").split("/")[0]
         logger.info(f"[WebTrafficAgent] Starting for {domain} ({company_id})")
 
-        # ── Try Enrichlyer first ──────────────────────────────────────────
+        # ── Try Enrichlayer first ──────────────────────────────────────────
         data = await self.enrichlyr.get_web_traffic(domain)
 
         if "error" in data or data.get("found") is False:

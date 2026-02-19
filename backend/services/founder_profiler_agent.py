@@ -75,7 +75,7 @@ class FounderProfilerAgent:
             enrichment_tbl.insert({
                 "company_id": company_id,
                 "source_type": "founder_profiles",
-                "source_url": "enrichlyer",
+                "source_url": "enrichlayer",
                 "data": output,
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
                 "is_valid": True,
@@ -143,7 +143,7 @@ class FounderProfilerAgent:
         """Build basic dossier when no LinkedIn URL available."""
         name = founder.get("name", "Unknown")
 
-        # Try Enrichlyer person lookup if we have domain
+        # Try Enrichlayer person lookup if we have domain
         if company_domain:
             try:
                 from integrations.clients import EnrichlyrClient
