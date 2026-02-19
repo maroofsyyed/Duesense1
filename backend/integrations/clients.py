@@ -16,11 +16,23 @@ class GitHubClient:
 
     async def find_organization(self, company_name: str) -> dict:
         async with httpx.AsyncClient(timeout=15.0) as client:
+            # First attempt with token
             response = await client.get(
                 f"{self.base_url}/search/users",
                 headers=self.headers,
                 params={"q": f"{company_name} type:org", "per_page": 5},
             )
+            
+            # Message to retry without token if 401
+            if response.status_code == 401:
+                # Retry without auth
+                headers_no_auth = {k: v for k, v in self.headers.items() if k != "Authorization"}
+                response = await client.get(
+                    f"{self.base_url}/search/users",
+                    headers=headers_no_auth,
+                    params={"q": f"{company_name} type:org", "per_page": 5},
+                )
+
             if response.status_code != 200:
                 return {"error": f"GitHub API error: {response.status_code}"}
             data = response.json()
@@ -28,9 +40,14 @@ class GitHubClient:
                 return {"found": False, "message": "No GitHub organization found"}
 
             org = data["items"][0]
+            
+            # Fetch Org Details (handle 401 retry again pattern if needed, but simple fallback for now)
+            headers_to_use = self.headers if response.status_code != 401 else {k: v for k, v in self.headers.items() if k != "Authorization"}
+            
             org_response = await client.get(
-                f"{self.base_url}/orgs/{org['login']}", headers=self.headers
+                f"{self.base_url}/orgs/{org['login']}", headers=headers_to_use
             )
+            
             if org_response.status_code == 200:
                 org_data = org_response.json()
                 return {
@@ -48,11 +65,23 @@ class GitHubClient:
 
     async def analyze_repositories(self, org_login: str) -> dict:
         async with httpx.AsyncClient(timeout=15.0) as client:
+            headers_to_use = self.headers
+            
+            # Optimistic attempt
             response = await client.get(
                 f"{self.base_url}/orgs/{org_login}/repos",
-                headers=self.headers,
+                headers=headers_to_use,
                 params={"per_page": 30, "sort": "updated"},
             )
+            
+            if response.status_code == 401:
+                headers_to_use = {k: v for k, v in self.headers.items() if k != "Authorization"}
+                response = await client.get(
+                    f"{self.base_url}/orgs/{org_login}/repos",
+                    headers=headers_to_use,
+                    params={"per_page": 30, "sort": "updated"},
+                )
+
             if response.status_code != 200:
                 return {"error": f"Could not fetch repos: {response.status_code}"}
 
@@ -204,21 +233,47 @@ class ScraperClient:
 
     async def scrape_website(self, url: str) -> dict:
         from bs4 import BeautifulSoup
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.get(
-                    "http://api.scraperapi.com",
-                    params={"api_key": self.api_key, "url": url, "render": "false"},
-                )
-                if response.status_code != 200:
-                    return {"error": f"Scraper error: {response.status_code}"}
+        
+        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = None
+            used_api = False
+            
+            # Try ScraperAPI if key exists
+            if self.api_key:
+                try:
+                    response = await client.get(
+                        "http://api.scraperapi.com",
+                        params={"api_key": self.api_key, "url": url, "render": "false"},
+                    )
+                    used_api = True
+                except Exception:
+                    pass
+            
+            # Fallback to direct connection if no key or API failed
+            if not response or response.status_code != 200:
+                try:
+                    # Direct Fallback
+                    response = await client.get(
+                        url,
+                        headers={"User-Agent": user_agent},
+                    )
+                except Exception as e:
+                    return {"error": f"Scrape failed (Direct & API): {str(e)}"}
 
+            if response.status_code != 200:
+                return {"error": f"Scraper error: {response.status_code}"}
+
+            try:
                 soup = BeautifulSoup(response.text, "html.parser")
                 meta_desc = ""
                 meta = soup.find("meta", attrs={"name": "description"})
                 if meta:
                     meta_desc = meta.get("content", "")
 
+                text = soup.get_text(separator="\n", strip=True)[:3000]
+                
                 return {
                     "title": soup.title.string if soup.title else "",
                     "meta_description": meta_desc,
@@ -226,12 +281,12 @@ class ScraperClient:
                         "h1": [h.get_text(strip=True) for h in soup.find_all("h1")][:5],
                         "h2": [h.get_text(strip=True) for h in soup.find_all("h2")][:10],
                     },
-                    "text_content": soup.get_text(separator="\n", strip=True)[:3000],
+                    "text_content": text,
                     "has_pricing": bool(soup.find(string=lambda t: t and "pricing" in t.lower())),
                     "has_careers": bool(soup.find(string=lambda t: t and "careers" in t.lower())),
                 }
             except Exception as e:
-                return {"error": str(e)}
+                return {"error": f"Parse error: {str(e)}"}
 
 
 class EnrichlyrClient:
