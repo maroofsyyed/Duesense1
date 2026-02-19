@@ -105,7 +105,9 @@ async def _agent_website_intelligence(enrichment: dict) -> dict:
 
 async def _agent_linkedin_enrichment(enrichment: dict) -> dict:
     """Score LinkedIn enrichment quality (0-5)."""
-    li_data = enrichment.get("linkedin_enrichment", {})
+    # Accept both key names: enrichment engine stores as "linkedin",
+    # but scorer historically expected "linkedin_enrichment"
+    li_data = enrichment.get("linkedin_enrichment") or enrichment.get("linkedin", {})
     if not li_data or "error" in li_data:
         return {"total_linkedin_score": 0, "reasoning": "No LinkedIn data", "confidence": "LOW"}
 
@@ -192,7 +194,10 @@ async def _agent_funding_quality(enrichment: dict) -> dict:
 async def _agent_web_growth_signals(enrichment: dict) -> dict:
     """Score web and social growth signals (0-3)."""
     traffic = enrichment.get("web_traffic", {})
+    # Accept both flat and nested social_signals structures
     social = enrichment.get("social_signals", {})
+    if isinstance(social, dict) and "data" in social:
+        social = social["data"]
 
     score = 0.0
     reasons = []

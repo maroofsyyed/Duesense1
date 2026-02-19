@@ -11,7 +11,7 @@ import logging
 # Use centralized database module
 import db as database
 
-from integrations.clients import GitHubClient, NewsClient, SerpClient, ScraperClient
+from integrations.clients import GitHubClient, NewsClient, SerpClient, ScraperClient, HunterIOClient, AbstractAPIClient
 from services.linkedin_agent import LinkedInEnrichmentAgent
 from services.founder_profiler_agent import FounderProfilerAgent
 from services.social_signals_agent import SocialSignalsAgent
@@ -85,6 +85,11 @@ async def enrich_company(company_id: str, extracted_data: dict) -> dict:
     if website:
         tasks["website"] = _enrich_website(company_id, website)
         tasks["website_intelligence"] = _enrich_website_deep(company_id, website)
+
+    # Email intelligence (HunterIO) and company validation (AbstractAPI)
+    if company_domain:
+        tasks["email_intel"] = _enrich_email_intel(company_id, company_domain)
+        tasks["company_validation"] = _enrich_company_validation(company_id, company_domain)
 
     results = {}
     task_items = list(tasks.items())
@@ -302,6 +307,40 @@ async def _enrich_social_signals(
     """Aggregate social signals from GitHub, Twitter, LinkedIn, YouTube."""
     agent = SocialSignalsAgent()
     return await agent.gather_signals(company_id, company_name, company_domain)
+
+
+async def _enrich_email_intel(company_id: str, company_domain: str) -> dict:
+    """Email intelligence via HunterIO — find company emails and key contacts."""
+    hunter = HunterIOClient()
+    data = await hunter.domain_search(company_domain)
+
+    if "error" not in data:
+        get_enrichment_col().insert({
+            "company_id": company_id,
+            "source_type": "email_intel",
+            "source_url": f"https://hunter.io/{company_domain}",
+            "data": data,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "is_valid": True,
+        })
+    return data
+
+
+async def _enrich_company_validation(company_id: str, company_domain: str) -> dict:
+    """Company validation via AbstractAPI — email verification + company enrichment."""
+    abstract_client = AbstractAPIClient()
+    data = await abstract_client.get_company_info(company_domain)
+
+    if "error" not in data:
+        get_enrichment_col().insert({
+            "company_id": company_id,
+            "source_type": "company_validation",
+            "source_url": f"https://abstractapi.com/{company_domain}",
+            "data": data,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "is_valid": True,
+        })
+    return data
 
 
 async def _enrich_glassdoor(company_id: str, company_name: str) -> dict:

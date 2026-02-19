@@ -43,6 +43,8 @@ async def agent_market_opportunity(extracted: dict, enrichment: dict) -> dict:
     market = extracted.get("market", {})
     market_research = enrichment.get("market", {})
     news = enrichment.get("news", {})
+    competitors = enrichment.get("competitors", {})
+    market_sizing = enrichment.get("market_sizing", {})
 
     prompt = f"""You are a VC analyst evaluating market opportunity. Score out of 20 points.
 
@@ -63,6 +65,12 @@ NEWS:
 PROBLEM STATEMENT:
 {_safe_json(extracted.get('problem', {}))}
 
+COMPETITOR LANDSCAPE:
+{_safe_json(competitors)}
+
+MARKET SIZING ANALYSIS:
+{_safe_json(market_sizing)}
+
 Respond with JSON only:
 {{
   "market_size_score": number (0-7),
@@ -82,6 +90,7 @@ async def agent_technical_moat(extracted: dict, enrichment: dict) -> dict:
     solution = extracted.get("solution", {})
     github_data = enrichment.get("github", {})
     competitors = enrichment.get("competitors", {})
+    competitive_landscape = enrichment.get("competitive_landscape", {})
 
     prompt = f"""You are a VC analyst evaluating technical moat/defensibility. Score out of 20 points.
 
@@ -101,6 +110,9 @@ COMPETITOR DATA:
 
 COMPETITIVE ADVANTAGES:
 {_safe_json(extracted.get('competitive_advantages', []))}
+
+COMPETITIVE LANDSCAPE ANALYSIS:
+{_safe_json(competitive_landscape)}
 
 Respond with JSON only:
 {{
@@ -122,6 +134,8 @@ async def agent_traction(extracted: dict, enrichment: dict) -> dict:
     traction = extracted.get("traction", {})
     biz_model = extracted.get("business_model", {})
     website = enrichment.get("website", {})
+    social = enrichment.get("social_signals", {})
+    web_traffic = enrichment.get("web_traffic", {})
 
     prompt = f"""You are a VC analyst evaluating traction and metrics. Score out of 20 points.
 
@@ -139,6 +153,12 @@ BUSINESS MODEL:
 
 WEBSITE SIGNALS:
 {_safe_json(website)}
+
+SOCIAL SIGNALS:
+{_safe_json(social)}
+
+WEB TRAFFIC:
+{_safe_json(web_traffic)}
 
 Respond with JSON only:
 {{

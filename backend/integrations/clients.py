@@ -547,6 +547,150 @@ class EnrichlyrClient:
         return result.get("results", result.get("companies", []))
 
 
+class HunterIOClient:
+    """
+    Hunter.io API client — domain email search and email verification.
+
+    Used to find and verify professional email addresses for founders
+    and key company contacts during enrichment.
+    """
+
+    BASE_URL = "https://api.hunter.io/v2"
+
+    def __init__(self):
+        self.api_key = os.environ.get("HUNTER_API_KEY")
+
+    async def domain_search(self, domain: str, limit: int = 10) -> dict:
+        """Find email addresses associated with a domain."""
+        if not self.api_key:
+            return {"error": "HUNTER_API_KEY not configured"}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(
+                    f"{self.BASE_URL}/domain-search",
+                    params={
+                        "domain": domain,
+                        "api_key": self.api_key,
+                        "limit": limit,
+                    },
+                )
+                if resp.status_code != 200:
+                    return {"error": f"Hunter HTTP {resp.status_code}"}
+                data = resp.json().get("data", {})
+                emails = []
+                for e in data.get("emails", []):
+                    emails.append({
+                        "email": e.get("value"),
+                        "type": e.get("type"),  # personal / generic
+                        "confidence": e.get("confidence"),
+                        "first_name": e.get("first_name"),
+                        "last_name": e.get("last_name"),
+                        "position": e.get("position"),
+                        "department": e.get("department"),
+                        "linkedin": e.get("linkedin"),
+                    })
+                return {
+                    "domain": data.get("domain"),
+                    "organization": data.get("organization"),
+                    "email_pattern": data.get("pattern"),
+                    "emails": emails,
+                    "total_found": data.get("total", 0),
+                    "department_breakdown": data.get("departments", {}),
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+    async def verify_email(self, email: str) -> dict:
+        """Verify a single email address."""
+        if not self.api_key:
+            return {"error": "HUNTER_API_KEY not configured"}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(
+                    f"{self.BASE_URL}/email-verifier",
+                    params={"email": email, "api_key": self.api_key},
+                )
+                if resp.status_code != 200:
+                    return {"error": f"Hunter HTTP {resp.status_code}"}
+                data = resp.json().get("data", {})
+                return {
+                    "email": data.get("email"),
+                    "result": data.get("result"),  # deliverable / undeliverable / risky
+                    "score": data.get("score"),  # 0-100
+                    "is_valid": data.get("result") == "deliverable",
+                    "is_disposable": data.get("disposable"),
+                    "is_webmail": data.get("webmail"),
+                    "mx_records": data.get("mx_records"),
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+
+class AbstractAPIClient:
+    """
+    AbstractAPI client — email validation and company enrichment.
+
+    Uses AbstractAPI to validate email addresses and gather
+    supplementary company data for due diligence.
+    """
+
+    def __init__(self):
+        self.api_key = os.environ.get("ABSTRACT_API_KEY")
+
+    async def validate_email(self, email: str) -> dict:
+        """Validate an email address using AbstractAPI."""
+        if not self.api_key:
+            return {"error": "ABSTRACT_API_KEY not configured"}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(
+                    "https://emailvalidation.abstractapi.com/v1/",
+                    params={"api_key": self.api_key, "email": email},
+                )
+                if resp.status_code != 200:
+                    return {"error": f"AbstractAPI HTTP {resp.status_code}"}
+                data = resp.json()
+                return {
+                    "email": data.get("email"),
+                    "is_valid": data.get("is_valid_format", {}).get("value", False),
+                    "is_deliverable": data.get("deliverability") == "DELIVERABLE",
+                    "quality_score": data.get("quality_score"),
+                    "is_free_email": data.get("is_free_email", {}).get("value", False),
+                    "is_disposable": data.get("is_disposable_email", {}).get("value", False),
+                    "is_catchall": data.get("is_catchall_email", {}).get("value", False),
+                    "mx_found": data.get("is_mx_found", {}).get("value", False),
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+    async def get_company_info(self, domain: str) -> dict:
+        """Get company information from AbstractAPI (company enrichment)."""
+        if not self.api_key:
+            return {"error": "ABSTRACT_API_KEY not configured"}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(
+                    "https://companyenrichment.abstractapi.com/v1/",
+                    params={"api_key": self.api_key, "domain": domain},
+                )
+                if resp.status_code != 200:
+                    return {"error": f"AbstractAPI HTTP {resp.status_code}"}
+                data = resp.json()
+                return {
+                    "name": data.get("name"),
+                    "domain": data.get("domain"),
+                    "country": data.get("country"),
+                    "locality": data.get("locality"),
+                    "industry": data.get("industry"),
+                    "employee_count": data.get("linkedin_url") and data.get("employee_count"),
+                    "year_founded": data.get("year_founded"),
+                    "linkedin_url": data.get("linkedin_url"),
+                    "logo": data.get("logo"),
+                }
+            except Exception as e:
+                return {"error": str(e)}
+
+
 def _simple_sentiment(text: str) -> str:
     text_lower = text.lower()
     pos = ["success", "growth", "raised", "funding", "launch", "partnership", "award", "revenue", "profitable"]

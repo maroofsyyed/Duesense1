@@ -667,6 +667,33 @@ async def process_deck_pipeline(deck_id: str, company_id: str, file_path: str, f
             logger.error(f"Enrichment failed: {type(enrich_err).__name__}: {enrich_err}")
             enrichment_data = {"error": str(enrich_err)}
 
+        # Run funding + web traffic agents (parallel) — matches orchestrator pipeline
+        try:
+            extra_tasks = {}
+            company_name = extracted.get("company", {}).get("name", "")
+            deck_funding = extracted.get("funding", extracted.get("financials", {}))
+
+            from services.funding_agent import run_funding_agent
+            extra_tasks["funding_history"] = run_funding_agent(
+                company_id, company_name, final_website, deck_funding
+            )
+
+            if final_website:
+                from services.web_traffic_agent import run_web_traffic_agent
+                extra_tasks["web_traffic"] = run_web_traffic_agent(company_id, final_website)
+
+            if extra_tasks:
+                extra_names = list(extra_tasks.keys())
+                extra_coros = list(extra_tasks.values())
+                extra_results = await asyncio.gather(*extra_coros, return_exceptions=True)
+                for ename, eresult in zip(extra_names, extra_results):
+                    if not isinstance(eresult, Exception):
+                        enrichment_data[ename] = eresult
+                    else:
+                        logger.warning(f"Extra enrichment {ename} failed: {eresult}")
+        except Exception as extra_err:
+            logger.warning(f"Extra enrichment agents failed (non-fatal): {extra_err}")
+
         companies_tbl.update({"id": company_id}, {"status": "scoring"})
 
         # Step 3: Score
