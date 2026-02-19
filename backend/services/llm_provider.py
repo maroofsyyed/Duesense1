@@ -190,34 +190,47 @@ class LLMProvider:
         max_tokens: int,
         temperature: float,
     ) -> str:
-        # Sarvam typically uses a single robust model
-        model = "sarvam-2b-v0.5" 
+        # Sarvam 'sarvam-2b' is the standard model
+        model = "sarvam-2b"
+
+        # Clamp max_tokens to 1024 for Sarvam models (typical limit)
+        safe_max_tokens = min(max_tokens, 1024)
 
         headers = {
             "Authorization": f"Bearer {self.sarvam_api_key}",
             "Content-Type": "application/json",
         }
 
+        # Merge system message into user message for better compatibility
+        full_content = f"{system_message}\n\n{prompt}"
+        
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": full_content},
             ],
-            "max_tokens": max_tokens,
+            "max_tokens": safe_max_tokens,
             "temperature": temperature,
         }
 
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(SARVAM_BASE_URL, headers=headers, json=payload)
 
+        if r.status_code == 400:
+             # Log the response body for debugging
+            logger.error(f"❌ Sarvam AI 400 Bad Request: {r.text}")
+            raise RuntimeError(f"Sarvam API Client Error: {r.text}")
+
         if r.status_code == 429:
             raise RuntimeError("Rate limited")
+        
         if r.status_code >= 500:
             raise RuntimeError(f"Server error: {r.status_code}")
+            
         r.raise_for_status()
 
         return r.json()["choices"][0]["message"]["content"]
+
 
 
 # Singleton
