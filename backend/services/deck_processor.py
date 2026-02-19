@@ -61,7 +61,21 @@ async def extract_deck(file_path: str, file_ext: str) -> dict:
     try:
         logger.info(f"🤖 Sending {len(text[:12000])} chars to LLM for structuring...")
         structured = await _structure_with_llm(text)
-        logger.info(f"✓ LLM structuring complete")
+
+        # Validate extraction — company name must exist
+        company_name = structured.get("company", {}).get("name")
+        if not company_name or company_name in ("", "Unknown", "Unknown Company", "null"):
+            logger.warning("⚠️ Company name not extracted — retrying with simplified prompt...")
+            structured = await _structure_with_llm(text)
+            company_name = structured.get("company", {}).get("name")
+
+        if not company_name or company_name in ("", "Unknown", "Unknown Company", "null"):
+            logger.error("❌ Company name still not extracted after retry")
+            # Still return what we have — partial data is better than nothing
+        else:
+            logger.info(f"✓ Extracted company: {company_name}")
+
+        logger.info(f"✓ LLM structuring complete — keys: {list(structured.keys())}")
         return structured
     except Exception as e:
         logger.error(f"❌ LLM structuring failed: {type(e).__name__}: {e}")
