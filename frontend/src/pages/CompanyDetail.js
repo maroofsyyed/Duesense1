@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getCompany } from '../api';
+import { getCompany, rerunScoring } from '../api';
 import {
   ArrowLeft, Building2, Globe, MapPin, Calendar, Users, TrendingUp,
   Shield, Target, DollarSign, FileText, AlertTriangle, CheckCircle,
@@ -83,10 +83,9 @@ export default function CompanyDetail() {
           {score && (
             <div className="text-right bg-surface border border-border rounded-sm p-4" data-testid="score-badge">
               <div className="font-mono text-4xl font-bold text-text-primary">{score.total_score}</div>
-              <div className={`text-xs font-mono uppercase mt-1 ${
-                score.tier === 'TIER_1' ? 'text-success' : score.tier === 'TIER_2' ? 'text-primary' :
-                score.tier === 'TIER_3' ? 'text-warning' : 'text-destructive'
-              }`}>{score.tier_label || score.tier?.replace('_', ' ')}</div>
+              <div className={`text-xs font-mono uppercase mt-1 ${score.tier === 'TIER_1' ? 'text-success' : score.tier === 'TIER_2' ? 'text-primary' :
+                  score.tier === 'TIER_3' ? 'text-warning' : 'text-destructive'
+                }`}>{score.tier_label || score.tier?.replace('_', ' ')}</div>
               <div className="text-[10px] text-text-muted mt-1">{score.confidence_level} confidence</div>
             </div>
           )}
@@ -110,11 +109,10 @@ export default function CompanyDetail() {
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
               data-testid={`tab-${tab.key}`}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                activeTab === tab.key
+              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.key
                   ? 'border-primary text-primary'
                   : 'border-transparent text-text-muted hover:text-text-secondary'
-              }`}
+                }`}
             >
               <Icon size={16} />
               {tab.label}
@@ -128,7 +126,7 @@ export default function CompanyDetail() {
         {activeTab === 'overview' && <OverviewTab extracted={extracted} founders={founders} score={score} />}
         {activeTab === 'website_intel' && <WebsiteIntelTab data={websiteIntel} score={score} />}
         {activeTab === 'enrichment' && <EnrichmentTab enrichments={enrichments} />}
-        {activeTab === 'scoring' && <ScoringTab score={score} />}
+        {activeTab === 'scoring' && <ScoringTab score={score} companyId={company.id} onRefresh={loadCompany} />}
         {activeTab === 'memo' && <MemoTab memo={memo} />}
         {activeTab === 'competitors' && <CompetitorsTab competitors={competitors} enrichments={enrichments} />}
       </div>
@@ -667,8 +665,45 @@ function EnrichmentTab({ enrichments }) {
 }
 
 // ============ SCORING TAB ============
-function ScoringTab({ score }) {
-  if (!score) return <EmptyState message="Scoring not yet complete." />;
+function ScoringTab({ score, companyId, onRefresh }) {
+  const [rerunning, setRerunning] = useState(false);
+  const [rerunTriggered, setRerunTriggered] = useState(false);
+
+  const handleRerunScoring = async () => {
+    try {
+      setRerunning(true);
+      await rerunScoring(companyId);
+      setRerunTriggered(true);
+      // Start polling for score
+      setTimeout(() => onRefresh?.(), 3000);
+    } catch (e) {
+      console.error('Failed to trigger re-scoring:', e);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
+  if (!score) return (
+    <div className="flex flex-col items-center justify-center py-16 text-center" data-testid="scoring-empty">
+      <Target size={48} className="text-text-muted mb-4" />
+      <p className="text-text-muted text-sm mb-4">
+        {rerunTriggered ? 'Scoring in progress — this page will auto-refresh...' : 'Scoring not yet complete.'}
+      </p>
+      {!rerunTriggered ? (
+        <button
+          onClick={handleRerunScoring}
+          disabled={rerunning}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-sm text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          data-testid="rerun-scoring-btn"
+        >
+          {rerunning ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+          {rerunning ? 'Triggering...' : 'Run Scoring'}
+        </button>
+      ) : (
+        <Loader2 size={24} className="animate-spin text-primary" />
+      )}
+    </div>
+  );
 
   const radarData = [
     { subject: 'Founders', value: (score.founder_score / 25) * 100, fullMark: 100 },
@@ -721,12 +756,11 @@ function ScoringTab({ score }) {
 
       <Card title="Investment Thesis" icon={BookOpen} testId="investment-thesis">
         <div className="flex items-center gap-3 mb-4">
-          <span className={`px-3 py-1 text-sm font-mono font-bold rounded-sm ${
-            score.recommendation === 'STRONG BUY' ? 'bg-success/10 text-success border border-success/20' :
-            score.recommendation === 'BUY' ? 'bg-primary/10 text-primary border border-primary/20' :
-            score.recommendation === 'HOLD' ? 'bg-warning/10 text-warning border border-warning/20' :
-            'bg-destructive/10 text-destructive border border-destructive/20'
-          }`} data-testid="recommendation-badge">
+          <span className={`px-3 py-1 text-sm font-mono font-bold rounded-sm ${score.recommendation === 'STRONG BUY' ? 'bg-success/10 text-success border border-success/20' :
+              score.recommendation === 'BUY' ? 'bg-primary/10 text-primary border border-primary/20' :
+                score.recommendation === 'HOLD' ? 'bg-warning/10 text-warning border border-warning/20' :
+                  'bg-destructive/10 text-destructive border border-destructive/20'
+            }`} data-testid="recommendation-badge">
             {score.recommendation}
           </span>
           {score.expected_return && <span className="text-sm text-text-secondary">Expected: {score.expected_return}</span>}
@@ -851,13 +885,13 @@ function WebsiteDDCard({ score }) {
         <div className="relative w-24 h-24">
           <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 100 100">
             <circle cx="50" cy="50" r="42" stroke="#27272a" strokeWidth="6" fill="none" />
-            <circle 
-              cx="50" cy="50" r="42" 
+            <circle
+              cx="50" cy="50" r="42"
               stroke={ddScore >= 7 ? '#10b981' : ddScore >= 5 ? '#f59e0b' : '#ef4444'}
-              strokeWidth="6" 
-              fill="none" 
-              strokeDasharray={`${(ddScore / 10) * 264} 264`} 
-              strokeLinecap="round" 
+              strokeWidth="6"
+              fill="none"
+              strokeDasharray={`${(ddScore / 10) * 264} 264`}
+              strokeLinecap="round"
             />
           </svg>
           <div className="absolute inset-0 flex items-center justify-center">
@@ -925,7 +959,7 @@ function WebsiteDDCard({ score }) {
 function ScoreBar({ label, score, max }) {
   const percentage = (score / max) * 100;
   const color = percentage >= 70 ? 'bg-success' : percentage >= 40 ? 'bg-warning' : 'bg-destructive';
-  
+
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
@@ -974,9 +1008,8 @@ function MetricRow({ label, value }) {
 
 function SignalPill({ label, active }) {
   return (
-    <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-sm text-xs border ${
-      active ? 'bg-success/5 border-success/20 text-success' : 'bg-bg border-border text-text-muted'
-    }`}>
+    <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded-sm text-xs border ${active ? 'bg-success/5 border-success/20 text-success' : 'bg-bg border-border text-text-muted'
+      }`}>
       <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-success' : 'bg-text-muted'}`} />
       {label}
     </div>

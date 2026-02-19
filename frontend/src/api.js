@@ -64,5 +64,6 @@ export const getCompanyMemo = (companyId) => api.get(`/api/companies/${companyId
 export const triggerEnrichment = (companyId) => api.post(`/api/companies/${companyId}/enrich`);
 export const getWebsiteIntelligence = (companyId) => api.get(`/api/companies/${companyId}/website-intelligence`);
 export const rerunWebsiteIntelligence = (companyId) => api.post(`/api/companies/${companyId}/website-intelligence/rerun`);
+export const rerunScoring = (companyId) => api.post(`/api/companies/${companyId}/score/rerun`);
 
 export default api;

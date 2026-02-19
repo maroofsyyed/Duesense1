@@ -822,6 +822,72 @@ async def get_score(company_id: str):
     return score
 
 
+@app.post("/api/companies/{company_id}/score/rerun")
+async def rerun_scoring(company_id: str, background_tasks: BackgroundTasks):
+    """Re-trigger scoring for an existing company."""
+    validate_uuid(company_id)
+    company = get_companies_col().find_by_id(company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    deck = get_pitch_decks_col().find_one({"company_id": company_id})
+    extracted = deck.get("extracted_data", {}) if deck else {}
+
+    # Gather enrichment data from enrichment_collection rows
+    enrichment_rows = get_enrichment_col().find_many({"company_id": company_id})
+    enrichment_data = {}
+    for row in (enrichment_rows or []):
+        source = row.get("source_type", "")
+        data = row.get("data", {})
+        if source and data and isinstance(data, dict):
+            enrichment_data[source] = data
+
+    background_tasks.add_task(_run_scoring, company_id, extracted, enrichment_data, company)
+    return {"status": "scoring_rerun_started"}
+
+
+async def _run_scoring(company_id: str, extracted: dict, enrichment_data: dict, company: dict):
+    """Background task to run scoring (and optionally funding/traffic agents)."""
+    try:
+        # Run funding + web traffic agents if missing
+        company_name = extracted.get("company", {}).get("name", company.get("name", ""))
+        final_website = company.get("website")
+        if "funding_history" not in enrichment_data:
+            try:
+                from services.funding_agent import run_funding_agent
+                deck_funding = extracted.get("funding", extracted.get("financials", {}))
+                enrichment_data["funding_history"] = await run_funding_agent(
+                    company_id, company_name, final_website, deck_funding
+                )
+            except Exception as e:
+                logger.warning(f"Funding agent failed during re-score: {e}")
+
+        if final_website and "web_traffic" not in enrichment_data:
+            try:
+                from services.web_traffic_agent import run_web_traffic_agent
+                enrichment_data["web_traffic"] = await run_web_traffic_agent(company_id, final_website)
+            except Exception as e:
+                logger.warning(f"Web traffic agent failed during re-score: {e}")
+
+        from services.scorer import calculate_investment_score
+        score_data = await calculate_investment_score(company_id, extracted, enrichment_data)
+        logger.info(f"Re-scoring complete for {company_id}: total_score={score_data.get('total_score')}")
+
+        # Update company status
+        get_companies_col().update({"id": company_id}, {"status": "scored"})
+
+        # Also re-generate memo
+        try:
+            from services.memo_generator import generate_memo
+            await generate_memo(company_id, extracted, enrichment_data, score_data)
+            get_companies_col().update({"id": company_id}, {"status": "complete"})
+        except Exception as memo_err:
+            logger.warning(f"Memo generation failed during re-score: {memo_err}")
+
+    except Exception as e:
+        logger.error(f"Re-scoring failed for {company_id}: {type(e).__name__}: {e}")
+
+
 # ============ MEMO ============
 
 @app.get("/api/companies/{company_id}/memo")
