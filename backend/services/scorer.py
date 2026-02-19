@@ -486,7 +486,17 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
     high_count = confidences.count("HIGH")
     confidence = "HIGH" if high_count >= 5 else "LOW" if high_count <= 1 else "MEDIUM"
 
-    thesis = await _generate_thesis(extracted, total, tier, founder_result, market_result, moat_result, traction_result, model_result, website_result, website_dd_result)
+    try:
+        thesis = await _generate_thesis(extracted, total, tier, founder_result, market_result, moat_result, traction_result, model_result, website_result, website_dd_result)
+    except Exception as thesis_err:
+        logger.error(f"Thesis generation failed (scoring will still save): {thesis_err}")
+        thesis = {
+            "recommendation": "HOLD",
+            "investment_thesis": "Thesis generation failed due to an LLM error. Numeric scores are still valid.",
+            "top_reasons": [],
+            "top_risks": ["Thesis could not be generated — manual review recommended"],
+            "expected_return": "N/A",
+        }
 
     score_data = {
         "company_id": company_id,

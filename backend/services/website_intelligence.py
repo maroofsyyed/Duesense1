@@ -377,6 +377,23 @@ Return JSON:
         """AI synthesis: generate comprehensive website intelligence report."""
         import json
 
+        pages_crawled = all_data.get("crawl_results", {}).get("pages_crawled", 0)
+        if pages_crawled == 0:
+            return {
+                "overall_score": 0,
+                "score_breakdown": {"design_ux": 0, "content_quality": 0, "technical_execution": 0, "traction_signals": 0, "trust_signals": 0},
+                "product_maturity": {"score": 0, "verdict": "No website data available for analysis"},
+                "gtm_motion": {"type": "Unknown", "target": "N/A", "pricing_transparency": "LOW", "evidence": []},
+                "market_positioning": {"category": "N/A", "positioning": "N/A", "unique_angle": "N/A", "competitors_mentioned": []},
+                "traction_assessment": {"score": 0, "key_signals": []},
+                "technical_credibility": {"score": 0, "key_signals": []},
+                "team_quality": {"score": 0, "key_signals": []},
+                "red_flags": ["Website could not be crawled — unable to perform website intelligence analysis"],
+                "green_flags": [],
+                "revenue_model_assessment": {"model": "N/A", "pricing_strategy": "Unknown", "deal_size_estimate": None, "sales_complexity": "Unknown"},
+                "one_line_verdict": "Website provides no actionable data for due diligence; fundamental information about product, team, traction, and pricing is missing.",
+            }
+
         prompt = f"""You are analyzing a company's website to generate VC due diligence insights.
 
 CRAWL SUMMARY: {all_data.get('crawl_results', {}).get('pages_crawled', 0)} pages analyzed from {all_data.get('crawl_results', {}).get('base_url', 'unknown')}

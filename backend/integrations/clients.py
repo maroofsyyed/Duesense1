@@ -229,64 +229,112 @@ class SerpClient:
 
 class ScraperClient:
     def __init__(self):
-        self.api_key = os.environ.get("SCRAPER_API_KEY")
+        self.scraper_api_key = os.environ.get("SCRAPER_API_KEY")
+        self.firecrawl_api_key = os.environ.get("FIRECRAWL_API_KEY")
 
     async def scrape_website(self, url: str) -> dict:
         from bs4 import BeautifulSoup
-        
-        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            response = None
-            used_api = False
-            
-            # Try ScraperAPI if key exists
-            if self.api_key:
-                try:
-                    response = await client.get(
-                        "http://api.scraperapi.com",
-                        params={"api_key": self.api_key, "url": url, "render": "false"},
-                    )
-                    used_api = True
-                except Exception:
-                    pass
-            
-            # Fallback to direct connection if no key or API failed
-            if not response or response.status_code != 200:
-                try:
-                    # Direct Fallback
-                    response = await client.get(
-                        url,
-                        headers={"User-Agent": user_agent},
-                    )
-                except Exception as e:
-                    return {"error": f"Scrape failed (Direct & API): {str(e)}"}
+        import logging
+        _log = logging.getLogger(__name__)
 
-            if response.status_code != 200:
-                return {"error": f"Scraper error: {response.status_code}"}
-
+        # Strategy 1: Firecrawl (best for Cloudflare / JS-rendered sites)
+        if self.firecrawl_api_key:
             try:
-                soup = BeautifulSoup(response.text, "html.parser")
-                meta_desc = ""
-                meta = soup.find("meta", attrs={"name": "description"})
-                if meta:
-                    meta_desc = meta.get("content", "")
-
-                text = soup.get_text(separator="\n", strip=True)[:3000]
-                
-                return {
-                    "title": soup.title.string if soup.title else "",
-                    "meta_description": meta_desc,
-                    "headings": {
-                        "h1": [h.get_text(strip=True) for h in soup.find_all("h1")][:5],
-                        "h2": [h.get_text(strip=True) for h in soup.find_all("h2")][:10],
-                    },
-                    "text_content": text,
-                    "has_pricing": bool(soup.find(string=lambda t: t and "pricing" in t.lower())),
-                    "has_careers": bool(soup.find(string=lambda t: t and "careers" in t.lower())),
-                }
+                fc_result = await self._firecrawl_scrape(url)
+                if fc_result and not fc_result.get("error"):
+                    return fc_result
             except Exception as e:
-                return {"error": f"Parse error: {str(e)}"}
+                _log.warning(f"Firecrawl failed for {url}: {e}")
+
+        # Strategy 2: ScraperAPI
+        if self.scraper_api_key:
+            try:
+                sa_result = await self._scraperapi_scrape(url)
+                if sa_result and not sa_result.get("error"):
+                    return sa_result
+            except Exception as e:
+                _log.warning(f"ScraperAPI failed for {url}: {e}")
+
+        # Strategy 3: Direct HTTP
+        try:
+            return await self._direct_scrape(url)
+        except Exception as e:
+            return {"error": f"All scrape strategies failed for {url}: {str(e)}"}
+
+    async def _firecrawl_scrape(self, url: str) -> dict:
+        """Scrape using Firecrawl API — handles JS rendering and Cloudflare."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.firecrawl.dev/v1/scrape",
+                headers={
+                    "Authorization": f"Bearer {self.firecrawl_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "url": url,
+                    "formats": ["html"],
+                },
+            )
+            if resp.status_code != 200:
+                return {"error": f"Firecrawl HTTP {resp.status_code}"}
+
+            data = resp.json()
+            if not data.get("success"):
+                return {"error": "Firecrawl returned unsuccessful"}
+
+            fc_data = data.get("data", {})
+            html = fc_data.get("html", "")
+            if not html:
+                return {"error": "Firecrawl returned no HTML"}
+
+            return self._parse_html(html)
+
+    async def _scraperapi_scrape(self, url: str) -> dict:
+        """Scrape using ScraperAPI proxy."""
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(
+                "http://api.scraperapi.com",
+                params={"api_key": self.scraper_api_key, "url": url, "render": "false"},
+            )
+            if resp.status_code != 200:
+                return {"error": f"ScraperAPI HTTP {resp.status_code}"}
+            return self._parse_html(resp.text)
+
+    async def _direct_scrape(self, url: str) -> dict:
+        """Direct HTTP GET with browser User-Agent."""
+        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": user_agent})
+            if resp.status_code != 200:
+                return {"error": f"Direct scrape HTTP {resp.status_code}"}
+            return self._parse_html(resp.text)
+
+    @staticmethod
+    def _parse_html(html: str) -> dict:
+        """Parse raw HTML into structured page data."""
+        from bs4 import BeautifulSoup
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            meta_desc = ""
+            meta = soup.find("meta", attrs={"name": "description"})
+            if meta:
+                meta_desc = meta.get("content", "")
+
+            text = soup.get_text(separator="\n", strip=True)[:3000]
+
+            return {
+                "title": soup.title.string if soup.title else "",
+                "meta_description": meta_desc,
+                "headings": {
+                    "h1": [h.get_text(strip=True) for h in soup.find_all("h1")][:5],
+                    "h2": [h.get_text(strip=True) for h in soup.find_all("h2")][:10],
+                },
+                "text_content": text,
+                "has_pricing": bool(soup.find(string=lambda t: t and "pricing" in t.lower())),
+                "has_careers": bool(soup.find(string=lambda t: t and "careers" in t.lower())),
+            }
+        except Exception as e:
+            return {"error": f"Parse error: {str(e)}"}
 
 
 class EnrichlyrClient:
