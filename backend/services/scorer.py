@@ -469,17 +469,19 @@ async def calculate_investment_score(company_id: str, extracted: dict, enrichmen
     )
     tier = _classify_tier(total)
 
+    def _conf(d): return d.get("confidence", "MEDIUM") if isinstance(d, dict) else "MEDIUM"
+
     confidences = [
-        founder_result.get("confidence", "MEDIUM"),
-        market_result.get("confidence", "MEDIUM"),
-        moat_result.get("confidence", "MEDIUM"),
-        traction_result.get("confidence", "MEDIUM"),
-        model_result.get("confidence", "MEDIUM"),
-        website_result.get("confidence", "MEDIUM"),
-        website_dd_result.get("confidence", "MEDIUM"),
-        linkedin_result.get("confidence", "MEDIUM"),
-        funding_result.get("confidence", "MEDIUM"),
-        web_growth_result.get("confidence", "MEDIUM"),
+        _conf(founder_result),
+        _conf(market_result),
+        _conf(moat_result),
+        _conf(traction_result),
+        _conf(model_result),
+        _conf(website_result),
+        _conf(website_dd_result),
+        _conf(linkedin_result),
+        _conf(funding_result),
+        _conf(web_growth_result),
     ]
     high_count = confidences.count("HIGH")
     confidence = "HIGH" if high_count >= 5 else "LOW" if high_count <= 1 else "MEDIUM"

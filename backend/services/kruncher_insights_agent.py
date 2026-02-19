@@ -89,7 +89,7 @@ class KruncherInsightsAgent:
 
         # ── Also write to kruncher_insights table (fast API access) ───────
         try:
-            ki_tbl = database.supabase_client().table("kruncher_insights")
+            ki_tbl = database.get_client().table("kruncher_insights")
             ki_tbl.upsert({
                 "company_id": company_id,
                 "strengths": insights.get("strengths", []),

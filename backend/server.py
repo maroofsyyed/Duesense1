@@ -371,7 +371,7 @@ async def health_check():
         from services.llm_provider import llm
         llm._validate_token()
         llm_status = "ready"
-        llm_model = f"{llm.current_provider['name']}: {llm.current_model}"
+        llm_model = llm.current_providers
     except Exception as e:
         llm_error = str(e)[:200]
 
