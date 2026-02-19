@@ -57,10 +57,8 @@ Set these in Render dashboard → Environment:
 |----------|----------|-------|
 | `SUPABASE_URL` | ✅ | `https://xxx.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | `eyJ...` (from Supabase) |
-| **At least ONE LLM key:** | | |
-| `Z_API_KEY` | Pick one | Z.ai API key (recommended) |
-| `GROQ_API_KEY` | Pick one | GROQ API key |
-| `HUGGINGFACE_API_KEY` | Pick one | HuggingFace token (`hf_...`) |
+| **LLM key:** | | |
+| `Z_API_KEY` | ✅ | Z.ai API key (required) |
 | **Security:** | | |
 | `DUESENSE_API_KEY` | ✅ Prod | Generate: `openssl rand -hex 32` |
 | `ENABLE_DEMO_KEY` | ✅ Prod | `false` (IMPORTANT!) |

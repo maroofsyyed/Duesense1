@@ -2,7 +2,7 @@
 Kruncher Insights Agent — generates strengths, risks, questions & ice-breakers.
 
 Runs LAST in the pipeline (Stage 5). Has access to ALL enrichment + scoring results.
-Uses Anthropic Claude if ANTHROPIC_API_KEY set, otherwise falls back to llm_provider.
+Uses Z.ai via llm_provider for JSON generation.
 Stores result in enrichment_sources with source_type="kruncher_insights".
 """
 import json
@@ -27,7 +27,7 @@ class KruncherInsightsAgent:
     """
 
     def __init__(self):
-        self.anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        pass
 
     async def analyze(
         self,
@@ -60,7 +60,7 @@ class KruncherInsightsAgent:
         # ── Build the comprehensive prompt ────────────────────────────────
         prompt = self._build_prompt(company_name, extracted, enrichment, score)
 
-        # ── Call LLM (Anthropic preferred, llm_provider fallback) ─────────
+        # ── Call LLM (Z.ai via llm_provider) ────────────────────────────────
         insights = await self._call_llm(prompt)
 
         if not insights or "error" in insights:
@@ -198,53 +198,10 @@ RULES:
 5. Every item must cite actual data from the enrichment. No generic boilerplate.
 6. If founder LinkedIn data is unavailable, make ice breakers based on deck data instead."""
 
-    # ── LLM Calls ─────────────────────────────────────────────────────────
+    # ── LLM Call ──────────────────────────────────────────────────────────
 
     async def _call_llm(self, prompt: str) -> dict:
-        """Try Anthropic first, then fall back to llm_provider."""
-        if self.anthropic_key:
-            result = await self._call_anthropic(prompt)
-            if result and "error" not in result:
-                return result
-            logger.info("[KruncherInsights] Anthropic failed, trying llm_provider fallback")
-
-        return await self._call_llm_provider(prompt)
-
-    async def _call_anthropic(self, prompt: str) -> dict:
-        """Call Anthropic Claude for high-quality insights."""
-        try:
-            import anthropic
-
-            client = anthropic.AsyncAnthropic(api_key=self.anthropic_key)
-            response = await client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=2500,
-                temperature=0.4,
-                system="You are a world-class VC analyst. Generate specific, data-grounded investment insights. Respond ONLY with valid JSON.",
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            text = response.content[0].text.strip()
-            # Extract JSON from potential markdown wrapping
-            if text.startswith("```"):
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-                text = text.strip()
-
-            return json.loads(text)
-        except ImportError:
-            logger.warning("[KruncherInsights] anthropic package not installed")
-            return {"error": "anthropic not installed"}
-        except json.JSONDecodeError as e:
-            logger.warning(f"[KruncherInsights] Anthropic JSON parse error: {e}")
-            return {"error": f"JSON parse error: {e}"}
-        except Exception as e:
-            logger.warning(f"[KruncherInsights] Anthropic call failed: {e}")
-            return {"error": str(e)}
-
-    async def _call_llm_provider(self, prompt: str) -> dict:
-        """Fallback to the existing llm_provider."""
+        """Call Z.ai via llm_provider for insight generation."""
         try:
             from services.llm_provider import llm
 

@@ -37,8 +37,6 @@ services:
         sync: false
       - key: FIRECRAWL_API_KEY
         sync: false
-      - key: YOUTUBE_API_KEY
-        sync: false
       # Configuration
       - key: MAX_FILE_SIZE_MB
         value: "50"

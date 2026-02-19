@@ -92,19 +92,7 @@ Choose at least ONE of the following:
 ```
 Z_API_KEY
 ```
-- **Value:** Your Z.ai API key (recommended - fast and reliable)
-
-```
-GROQ_API_KEY
-```
-- **Value:** Your GROQ API key (fast inference)
-
-```
-HUGGINGFACE_API_KEY
-```
-- **Value:** Your HuggingFace API token (starts with `hf_`)
-- **Get it from:** [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
-- **Note:** You can also use `HF_TOKEN` as the variable name
+- **Value:** Your Z.ai API key (required - fast and reliable)
 
 #### API Authentication (strongly recommended for production)
 
@@ -617,7 +605,7 @@ Run through this checklist to ensure everything works:
 4. **Wrong environment variable names**
    - Must match exactly (case-sensitive)
    - Required: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-   - LLM: At least one of `Z_API_KEY`, `GROQ_API_KEY`, `HUGGINGFACE_API_KEY`
+   - LLM: `Z_API_KEY`
 
 5. **Missing schema initialization**
    - Run `backend/database/schema.sql` in Supabase SQL Editor

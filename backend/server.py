@@ -134,19 +134,11 @@ def _validate_environment():
     else:
         logger.info("   Supabase credentials configured")
 
-    # Critical: At least one LLM provider
-    llm_providers = []
+    # Critical: Z.ai LLM provider
     if os.environ.get("Z_API_KEY"):
-        llm_providers.append("Z.ai")
-    if os.environ.get("GROQ_API_KEY"):
-        llm_providers.append("GROQ")
-    if os.environ.get("HUGGINGFACE_API_KEY") or os.environ.get("HF_TOKEN"):
-        llm_providers.append("HuggingFace")
-
-    if not llm_providers:
-        critical_missing.append("At least one LLM API key (Z_API_KEY, GROQ_API_KEY, or HUGGINGFACE_API_KEY)")
+        logger.info("   LLM provider: Z.ai")
     else:
-        logger.info(f"   LLM providers: {', '.join(llm_providers)}")
+        critical_missing.append("Z_API_KEY (required LLM provider)")
 
     # Warnings: Optional but recommended
     if not os.environ.get("GITHUB_TOKEN"):

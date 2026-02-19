@@ -38,10 +38,8 @@ Enterprise-grade pitch deck analysis and investment memo generation for venture 
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=xxx
 
-# LLM (at least one)
+# LLM
 Z_API_KEY=xxx
-GROQ_API_KEY=xxx
-HUGGINGFACE_API_KEY=xxx
 
 # Security
 DUESENSE_API_KEY=your-secure-api-key-here
@@ -84,8 +82,8 @@ REACT_APP_BACKEND_URL=https://your-backend.onrender.com
 - **Backend:** FastAPI + Python 3.11.9
 - **Frontend:** React + Tailwind CSS
 - **Database:** Supabase (PostgreSQL)
-- **LLMs:** Z.ai / GROQ / HuggingFace
-- **Hosting:** Render + Vercel
+- **LLMs:** Z.ai
+- **Hosting:** Render
 
 ## Local Development
 
@@ -94,7 +92,7 @@ cd backend
 pip install -r requirements.txt
 export SUPABASE_URL="https://xxx.supabase.co"
 export SUPABASE_SERVICE_ROLE_KEY="xxx"
-export HUGGINGFACE_API_KEY="hf_..."
+export Z_API_KEY="..."
 export ENABLE_DEMO_KEY=true
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```

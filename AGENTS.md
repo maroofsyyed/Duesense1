@@ -41,12 +41,9 @@ DueSense/
 ## Backend Architecture
 
 ### LLM Provider
-- **Multi-provider support** with automatic fallback:
-  1. **Z.ai** (OpenAI-compatible, fast and reliable) - `Z_API_KEY`
-  2. **GROQ** (fast inference) - `GROQ_API_KEY`
-  3. **HuggingFace** (free tier fallback) - `HUGGINGFACE_API_KEY`
-- **Auto-fallback**: On rate limits or model unavailability
-- **At least one provider required**
+- **Z.ai** (OpenAI-compatible, fast and reliable) - `Z_API_KEY`
+- All LLM calls route through `llm_provider.py`
+- Smart model selection: GPT-4o for complex tasks, GPT-4o-mini for standard
 
 ### Database: Supabase (PostgreSQL)
 - **Lazy initialization**: Supabase client is created on first use
@@ -71,7 +68,7 @@ cd backend
 pip install -r requirements.txt
 export SUPABASE_URL="https://xxx.supabase.co"
 export SUPABASE_SERVICE_ROLE_KEY="eyJ..."
-export Z_API_KEY="..." # or GROQ_API_KEY or HUGGINGFACE_API_KEY
+export Z_API_KEY="..."
 export DUESENSE_API_KEY="your-api-key"
 export ENABLE_DEMO_KEY="true" # Only for local testing
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
@@ -97,7 +94,7 @@ docker run -p 10000:10000 \
 |----------|-------------|
 | `SUPABASE_URL` | Supabase project URL (e.g., `https://xxx.supabase.co`) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (not anon key) |
-| LLM API Key | At least one: `Z_API_KEY`, `GROQ_API_KEY`, or `HUGGINGFACE_API_KEY` |
+| `Z_API_KEY` | Z.ai API key (required) |
 
 ### Recommended for Production
 | Variable | Description |
